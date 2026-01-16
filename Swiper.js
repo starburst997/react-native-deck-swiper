@@ -145,16 +145,6 @@ class Swiper extends Component {
   // Create a native gesture that blocks external gestures (like modal dismiss)
   initializeBlockingGesture = () => {
     this._blockingGesture = Gesture.Pan()
-      .onStart(() => {
-        // Signal that drag has started
-        this.props.dragStart && this.props.dragStart()
-      })
-      .onEnd(() => {
-        // Signal that drag has ended
-        this.props.dragEnd && this.props.dragEnd()
-      })
-      // Make this gesture block external gestures
-      .blocksExternalGesture(...(this.props.simultaneousHandlerRefs || []))
       // Activate quickly to capture the gesture before parent
       .minDistance(0)
       .enabled(this.props.blockParentGestures)
