@@ -1,5 +1,6 @@
 declare module 'react-native-deck-swiper' {
   import {StyleProp, ViewStyle} from 'react-native';
+  import type { GestureRef } from 'react-native-gesture-handler';
 
   export interface SwiperProps<T> {
     animateCardOpacity?: boolean;
@@ -72,6 +73,25 @@ declare module 'react-native-deck-swiper' {
     verticalThreshold?: number;
     zoomAnimationDuration?: number;
     zoomFriction?: number;
+    /**
+     * Block parent gestures (like modal swipe-to-dismiss) from interfering with card swipes.
+     * Uses react-native-gesture-handler to capture gestures at the native level.
+     * @default true
+     */
+    blockParentGestures?: boolean;
+    /**
+     * Array of gesture refs that should be allowed to run simultaneously with the swiper gesture.
+     * @default []
+     */
+    simultaneousHandlerRefs?: GestureRef[];
+    /**
+     * Called when a drag gesture starts
+     */
+    dragStart?: () => void;
+    /**
+     * Called when a drag gesture ends
+     */
+    dragEnd?: () => void;
   }
 
   export default class Swiper<T> extends React.Component<SwiperProps<T>> {

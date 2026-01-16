@@ -2,6 +2,7 @@ import React, { Component } from 'react'
 import { PanResponder, Text, View, Dimensions, Animated, InteractionManager } from 'react-native'
 import PropTypes from 'prop-types'
 import isEqual from 'lodash/isEqual'
+import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 
 import styles from './styles'
 
@@ -62,6 +63,7 @@ class Swiper extends Component {
 
     this.initializeCardStyle()
     this.initializePanResponder()
+    this.initializeBlockingGesture()
   }
 
   shouldComponentUpdate = (nextProps, nextState) => {
@@ -134,8 +136,28 @@ class Swiper extends Component {
       onPanResponderGrant: this.onPanResponderGrant,
       onPanResponderMove: this.onPanResponderMove,
       onPanResponderRelease: this.onPanResponderRelease,
-      onPanResponderTerminate: this.onPanResponderRelease
+      onPanResponderTerminate: this.onPanResponderRelease,
+      // Block parent gestures from stealing the responder
+      onPanResponderTerminationRequest: () => !this.props.blockParentGestures
     })
+  }
+
+  // Create a native gesture that blocks external gestures (like modal dismiss)
+  initializeBlockingGesture = () => {
+    this._blockingGesture = Gesture.Pan()
+      .onStart(() => {
+        // Signal that drag has started
+        this.props.dragStart && this.props.dragStart()
+      })
+      .onEnd(() => {
+        // Signal that drag has ended
+        this.props.dragEnd && this.props.dragEnd()
+      })
+      // Make this gesture block external gestures
+      .blocksExternalGesture(...(this.props.simultaneousHandlerRefs || []))
+      // Activate quickly to capture the gesture before parent
+      .minDistance(0)
+      .enabled(this.props.blockParentGestures)
   }
 
   createAnimatedEvent = () => {
@@ -711,8 +733,9 @@ class Swiper extends Component {
     })
 
   render = () => {
-    const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID } = this.props
-    return (
+    const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID, blockParentGestures } = this.props
+
+    const content = (
       <View
         pointerEvents={pointerEvents}
         testID={testID}
@@ -731,6 +754,17 @@ class Swiper extends Component {
         {this.renderStack()}
       </View>
     )
+
+    // Wrap with GestureDetector to block parent gestures (like modal dismiss)
+    if (blockParentGestures && this._blockingGesture) {
+      return (
+        <GestureDetector gesture={this._blockingGesture}>
+          {content}
+        </GestureDetector>
+      )
+    }
+
+    return content
   }
 
   renderChildren = () => {
@@ -936,7 +970,10 @@ Swiper.propTypes = {
   verticalSwipe: PropTypes.bool,
   verticalThreshold: PropTypes.number,
   zoomAnimationDuration: PropTypes.number,
-  zoomFriction: PropTypes.number
+  zoomFriction: PropTypes.number,
+  // Gesture blocking props
+  blockParentGestures: PropTypes.bool,
+  simultaneousHandlerRefs: PropTypes.array
 }
 
 Swiper.defaultProps = {
@@ -1030,7 +1067,10 @@ Swiper.defaultProps = {
   verticalSwipe: true,
   verticalThreshold: height / 5,
   zoomAnimationDuration: 100,
-  zoomFriction: 7
+  zoomFriction: 7,
+  // Block parent gestures (like modal swipe-to-dismiss) by default
+  blockParentGestures: true,
+  simultaneousHandlerRefs: []
 }
 
 export default Swiper
