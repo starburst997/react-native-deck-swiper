@@ -53,14 +53,22 @@ class Swiper extends Component {
       isSwipingBack: false,
       // Track total swipes for slot rotation
       swipedCount: 0,
-      // Each slot's card index - only bottom slot gets updated on swipe
-      slotCardIndexes: Array.from({ length: props.stackSize }, (_, i) => props.cardIndex + i),
       ...rebuildStackAnimatedValues(props)
     }
 
     this._mounted = true
     this._animatedValueX = 0
     this._animatedValueY = 0
+
+    // Cache rendered card content - only update when slot goes to bottom
+    this._slotCardIndexes = Array.from({ length: props.stackSize }, (_, i) => props.cardIndex + i)
+    this._slotContents = Array.from({ length: props.stackSize }, (_, i) => {
+      const cardIndex = props.cardIndex + i
+      if (cardIndex < props.cards.length) {
+        return props.renderCard(props.cards[cardIndex], cardIndex)
+      }
+      return null
+    })
 
     this.state.pan.x.addListener(value => (this._animatedValueX = value.value))
     this.state.pan.y.addListener(value => (this._animatedValueY = value.value))
@@ -550,17 +558,17 @@ class Swiper extends Component {
       this._animatedValueX = 0
       this._animatedValueY = 0
 
-      const { swipedCount, slotCardIndexes } = this.state
-      const { stackSize, cards } = this.props
+      const { swipedCount } = this.state
+      const { stackSize, cards, renderCard } = this.props
 
       // The slot that was just swiped (goes to bottom)
       const swipedSlot = swipedCount % stackSize
 
-      // Only update card data for the slot going to the bottom
-      const newSlotCardIndexes = [...slotCardIndexes]
+      // Only update the cached content for the slot going to the bottom
       const bottomCardIndex = newCardIndex + stackSize - 1
       if (bottomCardIndex < cards.length) {
-        newSlotCardIndexes[swipedSlot] = bottomCardIndex
+        this._slotCardIndexes[swipedSlot] = bottomCardIndex
+        this._slotContents[swipedSlot] = renderCard(cards[bottomCardIndex], bottomCardIndex)
       }
 
       this.setState(
@@ -568,8 +576,7 @@ class Swiper extends Component {
           ...calculateCardIndexes(newCardIndex, this.props.cards),
           swipedAllCards: swipedAllCards,
           panResponderLocked: false,
-          swipedCount: swipedCount + 1,
-          slotCardIndexes: newSlotCardIndexes
+          swipedCount: swipedCount + 1
         },
         this.resetPanAndScale
       )
@@ -788,9 +795,11 @@ class Swiper extends Component {
     }
   }
 
-  pushCardToStackWithZIndex = (renderedCards, cardIndex, key, isTopCard, zIndex) => {
-    const { cards } = this.props
-    const stackCard = this.props.renderCard(cards[cardIndex], cardIndex)
+  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard, zIndex) => {
+    // Use cached content - this never changes except when slot goes to bottom
+    const stackCard = this._slotContents[slot]
+    if (!stackCard) return
+
     const renderOverlayLabel = this.renderOverlayLabel()
 
     if (isTopCard) {
@@ -841,8 +850,8 @@ class Swiper extends Component {
   }
 
   renderStack = () => {
-    const { swipedAllCards, swipedCount, slotCardIndexes } = this.state
-    const { cards, stackSize, showSecondCard } = this.props
+    const { swipedAllCards, swipedCount } = this.state
+    const { stackSize, showSecondCard } = this.props
     const slotsToRender = []
 
     if (swipedAllCards) {
@@ -857,8 +866,8 @@ class Swiper extends Component {
 
     // Collect slot info for rendering
     for (let slot = 0; slot < stackSize; slot++) {
-      const cardIndex = slotCardIndexes[slot]
-      if (cardIndex === undefined || cardIndex >= cards.length) {
+      // Skip if no cached content
+      if (!this._slotContents[slot]) {
         continue
       }
 
@@ -873,17 +882,17 @@ class Swiper extends Component {
       const distanceFromTop = (slot - topSlot + stackSize) % stackSize
       const zIndex = stackSize - distanceFromTop
 
-      slotsToRender.push({ slot, cardIndex, isTopCard, zIndex })
+      slotsToRender.push({ slot, isTopCard, zIndex })
     }
 
     // Sort by z-index ascending so highest z-index renders LAST (on top)
     slotsToRender.sort((a, b) => a.zIndex - b.zIndex)
 
-    // Render in sorted order
+    // Render in sorted order - pass slot number, cached content is used
     const renderedCards = []
-    for (const { slot, cardIndex, isTopCard, zIndex } of slotsToRender) {
+    for (const { slot, isTopCard, zIndex } of slotsToRender) {
       const stableKey = `slot-${slot}`
-      this.pushCardToStackWithZIndex(renderedCards, cardIndex, stableKey, isTopCard, zIndex)
+      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard, zIndex)
     }
 
     return renderedCards
