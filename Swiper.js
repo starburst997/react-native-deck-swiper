@@ -785,7 +785,8 @@ class Swiper extends Component {
       }
       cardPosition++
     }
-    return renderedCards
+    // Reverse so the first card (top of stack) is rendered last and appears on top
+    return renderedCards.reverse()
   }
 
   renderSwipeBackCard = () => {
