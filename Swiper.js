@@ -60,9 +60,9 @@ class Swiper extends Component {
     this._animatedValueX = 0
     this._animatedValueY = 0
 
-    // Animated z-index for each slot - can be updated synchronously before pan reset
+    // Regular z-index values for each slot - NOT Animated.Value since z-index shouldn't interpolate
     this._slotZIndexes = Array.from({ length: props.stackSize }, (_, i) =>
-      new Animated.Value(props.stackSize - i) // slot 0 = highest, slot 1 = second, etc.
+      props.stackSize - i // slot 0 = highest, slot 1 = second, etc.
     )
 
     // Cache rendered card content - only update when slot goes to bottom
@@ -416,20 +416,35 @@ class Swiper extends Component {
       duration: this.props.swipeAnimationDuration,
       useNativeDriver: true
     }).start(() => {
-      this.setSwipeBackCardXY(x, y, () => {
-        mustDecrementCardIndex = mustDecrementCardIndex
-          ? true
-          : this.mustDecrementCardIndex(
-            this._animatedValueX,
-            this._animatedValueY
-          )
+      // Animation completed - card is off-screen and invisible
+      // Update z-indexes immediately
+      const { swipedCount } = this.state
+      const { stackSize } = this.props
+      const newTopSlot = (swipedCount + 1) % stackSize
+      for (let i = 0; i < stackSize; i++) {
+        const distanceFromTop = (i - newTopSlot + stackSize) % stackSize
+        this._slotZIndexes[i] = stackSize - distanceFromTop
+      }
+      // Force re-render to apply z-index
+      this.forceUpdate()
 
-        if (mustDecrementCardIndex) {
-          this.decrementCardIndex(onSwiped)
-        } else {
-          this.incrementCardIndex(onSwiped)
-        }
-      })
+      // Small delay to ensure z-index is visually applied before pan reset
+      setTimeout(() => {
+        this.setSwipeBackCardXY(x, y, () => {
+          mustDecrementCardIndex = mustDecrementCardIndex
+            ? true
+            : this.mustDecrementCardIndex(
+                this._animatedValueX,
+                this._animatedValueY
+              )
+
+          if (mustDecrementCardIndex) {
+            this.decrementCardIndex(onSwiped)
+          } else {
+            this.incrementCardIndex(onSwiped)
+          }
+        })
+      }, 20)
     })
   }
 
@@ -562,16 +577,9 @@ class Swiper extends Component {
 
       // The slot that was just swiped (goes to bottom)
       const swipedSlot = swipedCount % stackSize
-      const newTopSlot = (swipedCount + 1) % stackSize
 
-      // UPDATE Z-INDEXES FIRST (synchronously) - BEFORE resetting pan!
-      // This ensures the swiped card is at bottom z-index before it snaps back to 0,0
-      for (let i = 0; i < stackSize; i++) {
-        const distanceFromTop = (i - newTopSlot + stackSize) % stackSize
-        this._slotZIndexes[i].setValue(stackSize - distanceFromTop)
-      }
-
-      // NOW reset pan - swiped card is already at bottom z-index, so it won't flash on top
+      // Z-indexes were already updated in swipeCard() before animation started
+      // Just reset pan - the swiped card is already at bottom z-index
       this.state.pan.setValue({ x: 0, y: 0 })
       this.state.pan.setOffset({ x: 0, y: 0 })
       this._animatedValueX = 0
@@ -813,8 +821,8 @@ class Swiper extends Component {
     const stackCard = this._slotContents[slot]
     if (!stackCard) return
 
-    // Use Animated z-index - updates synchronously without re-render
-    const animatedZIndex = this._slotZIndexes[slot]
+    // Get z-index for this slot (regular number, updated in swipeCard before animation)
+    const slotZIndex = this._slotZIndexes[slot]
     const renderOverlayLabel = this.renderOverlayLabel(isTopCard)
 
     // DEBUG: Show slot number on each card
@@ -835,7 +843,7 @@ class Swiper extends Component {
         styles.card,
         this.getCardStyle(),
         {
-          zIndex: animatedZIndex,
+          zIndex: slotZIndex,
           opacity: opacity,
           transform: [
             { translateX: this.state.pan.x },
@@ -859,7 +867,7 @@ class Swiper extends Component {
         styles.card,
         this.getCardStyle(),
         {
-          zIndex: animatedZIndex
+          zIndex: slotZIndex
         },
         this.props.cardStyle
       ]
