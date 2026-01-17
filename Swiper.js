@@ -1,5 +1,5 @@
 import React, { Component } from 'react'
-import { Text, View, Dimensions, Animated, InteractionManager } from 'react-native'
+import { Text, View, Dimensions, Animated, InteractionManager, StyleSheet } from 'react-native'
 import PropTypes from 'prop-types'
 import isEqual from 'lodash/isEqual'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
@@ -817,6 +817,13 @@ class Swiper extends Component {
     const animatedZIndex = this._slotZIndexes[slot]
     const renderOverlayLabel = this.renderOverlayLabel()
 
+    // DEBUG: Show slot number on each card
+    const debugLabel = (
+      <View style={debugStyles.debugContainer}>
+        <Text style={debugStyles.debugText}>{slot}</Text>
+      </View>
+    )
+
     if (isTopCard) {
       // Top card uses pan transform and overlay
       const opacity = this.props.animateCardOpacity
@@ -843,6 +850,7 @@ class Swiper extends Component {
         <Animated.View key={key} style={topCardStyle}>
           {renderOverlayLabel}
           {stackCard}
+          {debugLabel}
         </Animated.View>
       )
     } else {
@@ -859,6 +867,7 @@ class Swiper extends Component {
       renderedCards.push(
         <Animated.View key={key} style={stackCardStyle}>
           {stackCard}
+          {debugLabel}
         </Animated.View>
       )
     }
@@ -1124,5 +1133,25 @@ Swiper.defaultProps = {
   zoomAnimationDuration: 100,
   zoomFriction: 7
 }
+
+const debugStyles = StyleSheet.create({
+  debugContainer: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(255, 0, 0, 0.8)',
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100
+  },
+  debugText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold'
+  }
+})
 
 export default Swiper
