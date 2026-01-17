@@ -39,12 +39,6 @@ class Swiper extends Component {
   constructor (props) {
     super(props)
 
-    // Initialize slot cards - each slot shows a different card
-    const slotCards = []
-    for (let i = 0; i < props.stackSize; i++) {
-      slotCards.push(props.cardIndex + i)
-    }
-
     this.state = {
       ...calculateCardIndexes(props.cardIndex, props.cards),
       pan: new Animated.ValueXY(),
@@ -57,8 +51,10 @@ class Swiper extends Component {
       slideGesture: false,
       swipeBackXYPositions: [],
       isSwipingBack: false,
+      // Track total swipes for slot rotation
       swipedCount: 0,
-      slotCards: slotCards,
+      // Each slot's card index - only bottom slot gets updated on swipe
+      slotCardIndexes: Array.from({ length: props.stackSize }, (_, i) => props.cardIndex + i),
       ...rebuildStackAnimatedValues(props)
     }
 
@@ -554,18 +550,17 @@ class Swiper extends Component {
       this._animatedValueX = 0
       this._animatedValueY = 0
 
-      const { swipedCount, slotCards } = this.state
+      const { swipedCount, slotCardIndexes } = this.state
       const { stackSize, cards } = this.props
 
-      // The slot that was just swiped (now goes to bottom)
+      // The slot that was just swiped (goes to bottom)
       const swipedSlot = swipedCount % stackSize
 
-      // Update that slot to show the card at the bottom of the new visible stack
-      const newSlotCards = [...slotCards]
+      // Only update card data for the slot going to the bottom
+      const newSlotCardIndexes = [...slotCardIndexes]
       const bottomCardIndex = newCardIndex + stackSize - 1
-      // Only update if there's a card at that index
       if (bottomCardIndex < cards.length) {
-        newSlotCards[swipedSlot] = bottomCardIndex
+        newSlotCardIndexes[swipedSlot] = bottomCardIndex
       }
 
       this.setState(
@@ -574,7 +569,7 @@ class Swiper extends Component {
           swipedAllCards: swipedAllCards,
           panResponderLocked: false,
           swipedCount: swipedCount + 1,
-          slotCards: newSlotCards
+          slotCardIndexes: newSlotCardIndexes
         },
         this.resetPanAndScale
       )
@@ -793,38 +788,102 @@ class Swiper extends Component {
     }
   }
 
+  pushCardToStackWithZIndex = (renderedCards, cardIndex, key, isTopCard, zIndex) => {
+    const { cards } = this.props
+    const stackCard = this.props.renderCard(cards[cardIndex], cardIndex)
+    const renderOverlayLabel = this.renderOverlayLabel()
+
+    if (isTopCard) {
+      // Top card uses pan transform and overlay
+      const opacity = this.props.animateCardOpacity
+        ? this.interpolateCardOpacity()
+        : 1
+      const rotation = this.interpolateRotation()
+
+      const topCardStyle = [
+        styles.card,
+        this.getCardStyle(),
+        {
+          zIndex: zIndex,
+          opacity: opacity,
+          transform: [
+            { translateX: this.state.pan.x },
+            { translateY: this.state.pan.y },
+            { rotate: rotation }
+          ]
+        },
+        this.props.cardStyle
+      ]
+
+      renderedCards.push(
+        <Animated.View key={key} style={topCardStyle}>
+          {renderOverlayLabel}
+          {stackCard}
+        </Animated.View>
+      )
+    } else {
+      // Stack cards just use z-index, no transforms
+      const stackCardStyle = [
+        styles.card,
+        this.getCardStyle(),
+        {
+          zIndex: zIndex
+        },
+        this.props.cardStyle
+      ]
+
+      renderedCards.push(
+        <Animated.View key={key} style={stackCardStyle}>
+          {stackCard}
+        </Animated.View>
+      )
+    }
+  }
+
   renderStack = () => {
-    const { swipedAllCards, swipedCount, slotCards } = this.state
+    const { swipedAllCards, swipedCount, slotCardIndexes } = this.state
     const { cards, stackSize, showSecondCard } = this.props
-    const renderedCards = []
+    const slotsToRender = []
 
     if (swipedAllCards) {
-      return renderedCards
+      return []
     }
 
-    // Render each slot with a stable key
+    // Which slot is currently on top? It rotates with each swipe.
+    // At swipedCount=0, slot 0 is on top
+    // At swipedCount=1, slot 1 is on top
+    // etc.
+    const topSlot = swipedCount % stackSize
+
+    // Collect slot info for rendering
     for (let slot = 0; slot < stackSize; slot++) {
-      const cardIndex = slotCards[slot]
+      const cardIndex = slotCardIndexes[slot]
       if (cardIndex === undefined || cardIndex >= cards.length) {
         continue
       }
 
-      // Calculate visual position: which slot is on top based on swipedCount
-      // The slot at (swipedCount % stackSize) was just swiped and is now at bottom
-      // So the slot at ((swipedCount) % stackSize) is at position (stackSize - 1)
-      // And the slot at ((swipedCount + 1) % stackSize) is at position 0 (top)
-      const topSlot = (swipedCount) % stackSize
-      const visualPosition = (slot - topSlot + stackSize) % stackSize
+      const isTopCard = slot === topSlot
 
       // Skip non-top cards if showSecondCard is false
-      if (visualPosition > 0 && !showSecondCard) {
+      if (!isTopCard && !showSecondCard) {
         continue
       }
 
-      const isFirstCard = visualPosition === 0
-      const stableKey = `slot-${slot}`
+      // Calculate z-index: top card gets highest, others based on distance from top
+      const distanceFromTop = (slot - topSlot + stackSize) % stackSize
+      const zIndex = stackSize - distanceFromTop
 
-      this.pushCardToStack(renderedCards, cardIndex, visualPosition, stableKey, isFirstCard)
+      slotsToRender.push({ slot, cardIndex, isTopCard, zIndex })
+    }
+
+    // Sort by z-index ascending so highest z-index renders LAST (on top)
+    slotsToRender.sort((a, b) => a.zIndex - b.zIndex)
+
+    // Render in sorted order
+    const renderedCards = []
+    for (const { slot, cardIndex, isTopCard, zIndex } of slotsToRender) {
+      const stableKey = `slot-${slot}`
+      this.pushCardToStackWithZIndex(renderedCards, cardIndex, stableKey, isTopCard, zIndex)
     }
 
     return renderedCards
