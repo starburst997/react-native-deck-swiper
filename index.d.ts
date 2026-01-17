@@ -72,6 +72,14 @@ declare module 'react-native-deck-swiper' {
     verticalThreshold?: number;
     zoomAnimationDuration?: number;
     zoomFriction?: number;
+    /**
+     * Called when a drag gesture starts
+     */
+    dragStart?: () => void;
+    /**
+     * Called when a drag gesture ends
+     */
+    dragEnd?: () => void;
   }
 
   export default class Swiper<T> extends React.Component<SwiperProps<T>> {

@@ -1,7 +1,8 @@
-import React, { Component } from 'react'
-import { PanResponder, Text, View, Dimensions, Animated, InteractionManager } from 'react-native'
-import PropTypes from 'prop-types'
 import isEqual from 'lodash/isEqual'
+import PropTypes from 'prop-types'
+import React, { Component } from 'react'
+import { Animated, Dimensions, InteractionManager, StyleSheet, Text, View } from 'react-native'
+import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 
 import styles from './styles'
 
@@ -13,7 +14,7 @@ const LABEL_TYPES = {
   TOP: 'top',
   BOTTOM: 'bottom'
 }
-const SWIPE_MULTIPLY_FACTOR = 7
+const SWIPE_MULTIPLY_FACTOR = 4
 
 const calculateCardIndexes = (firstCardIndex, cards) => {
   firstCardIndex = firstCardIndex || 0
@@ -50,6 +51,8 @@ class Swiper extends Component {
       slideGesture: false,
       swipeBackXYPositions: [],
       isSwipingBack: false,
+      // Track total swipes for slot rotation
+      swipedCount: 0,
       ...rebuildStackAnimatedValues(props)
     }
 
@@ -57,11 +60,48 @@ class Swiper extends Component {
     this._animatedValueX = 0
     this._animatedValueY = 0
 
+    // Regular z-index values for each slot - NOT Animated.Value since z-index shouldn't interpolate
+    this._slotZIndexes = Array.from({ length: props.stackSize }, (_, i) =>
+      props.stackSize - i // slot 0 = highest, slot 1 = second, etc.
+    )
+
+    // Animated opacity for each slot - used for fade-in when card returns to bottom of stack
+    this._slotOpacities = Array.from({ length: props.stackSize }, () =>
+      new Animated.Value(1)
+    )
+
+    // Cache rendered card content - only update when slot goes to bottom
+    this._slotCardIndexes = Array.from({ length: props.stackSize }, (_, i) => props.cardIndex + i)
+    this._slotContents = Array.from({ length: props.stackSize }, (_, i) => {
+      const cardIndex = props.cardIndex + i
+      if (cardIndex < props.cards.length) {
+        return props.renderCard(props.cards[cardIndex], cardIndex)
+      }
+      return null
+    })
+
     this.state.pan.x.addListener(value => (this._animatedValueX = value.value))
     this.state.pan.y.addListener(value => (this._animatedValueY = value.value))
 
     this.initializeCardStyle()
-    this.initializePanResponder()
+    this.initializeGesture()
+  }
+
+  initializeGesture = () => {
+    this._panGesture = Gesture.Pan()
+      .runOnJS(true)
+      .onStart(() => {
+        this.onGestureStart()
+      })
+      .onUpdate((event) => {
+        this.onGestureMove(event.translationX, event.translationY)
+      })
+      .onEnd((event) => {
+        this.onGestureEnd(event.translationX, event.translationY, event.velocityX, event.velocityY)
+      })
+      .minDistance(5)
+      .activeOffsetX([-10, 10])
+      .activeOffsetY([-10, 10])
   }
 
   shouldComponentUpdate = (nextProps, nextState) => {
@@ -75,7 +115,8 @@ class Swiper extends Component {
       nextState.secondCardIndex !== state.secondCardIndex ||
       nextState.previousCardIndex !== state.previousCardIndex ||
       nextState.labelType !== state.labelType ||
-      nextState.swipedAllCards !== state.swipedAllCards
+      nextState.swipedAllCards !== state.swipedAllCards ||
+      nextState.swipedCount !== state.swipedCount
     )
     return propsChanged || stateChanged
   }
@@ -117,41 +158,27 @@ class Swiper extends Component {
     this.dimensionsChangeSubscription = Dimensions.addEventListener('change', this.onDimensionsChange)
   }
 
-  initializePanResponder = () => {
-    this._panResponder = PanResponder.create({
-      onStartShouldSetPanResponder: (event, gestureState) => true,
-      onMoveShouldSetPanResponder: (event, gestureState) => false,
-
-      onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
-        const isVerticalSwipe = Math.sqrt(
-          Math.pow(gestureState.dx, 2) < Math.pow(gestureState.dy, 2)
-        )
-        if (!this.props.verticalSwipe && isVerticalSwipe) {
-          return false
-        }
-        return Math.sqrt(Math.pow(gestureState.dx, 2) + Math.pow(gestureState.dy, 2)) > 10
-      },
-      onPanResponderGrant: this.onPanResponderGrant,
-      onPanResponderMove: this.onPanResponderMove,
-      onPanResponderRelease: this.onPanResponderRelease,
-      onPanResponderTerminate: this.onPanResponderRelease
-    })
+  onGestureStart = () => {
+    this.props.dragStart && this.props.dragStart()
+    if (!this.state.panResponderLocked) {
+      this.state.pan.setOffset({ x: 0, y: 0 })
+    }
+    this.state.pan.setValue({ x: 0, y: 0 })
   }
 
-  createAnimatedEvent = () => {
+  onGestureMove = (dx, dy) => {
     const { horizontalSwipe, verticalSwipe } = this.props
-    const { x, y } = this.state.pan
-    const dx = horizontalSwipe ? x : new Animated.Value(0)
-    const dy = verticalSwipe ? y : new Animated.Value(0)
-    return { dx, dy }
-  }
 
-  onDimensionsChange = () => {
-    this.forceUpdate()
-  }
+    // Update the animated values
+    const x = horizontalSwipe ? dx : 0
+    const y = verticalSwipe ? dy : 0
+    this.state.pan.setValue({ x, y })
 
-  onPanResponderMove = (event, gestureState) => {
-    this.props.onSwiping(this._animatedValueX, this._animatedValueY)
+    // Update internal tracking
+    this._animatedValueX = x
+    this._animatedValueY = y
+
+    this.props.onSwiping(x, y)
 
     let { overlayOpacityHorizontalThreshold, overlayOpacityVerticalThreshold } = this.props
     if (!overlayOpacityHorizontalThreshold) {
@@ -161,16 +188,13 @@ class Swiper extends Component {
       overlayOpacityVerticalThreshold = this.props.verticalThreshold
     }
 
-    let isSwipingLeft,
-      isSwipingRight,
-      isSwipingTop,
-      isSwipingBottom
+    let isSwipingLeft, isSwipingRight, isSwipingTop, isSwipingBottom
 
-    if (Math.abs(this._animatedValueX) > Math.abs(this._animatedValueY) && Math.abs(this._animatedValueX) > overlayOpacityHorizontalThreshold) {
-      if (this._animatedValueX > 0) isSwipingRight = true
+    if (Math.abs(x) > Math.abs(y) && Math.abs(x) > overlayOpacityHorizontalThreshold || true) {
+      if (x > 0) isSwipingRight = true
       else isSwipingLeft = true
-    } else if (Math.abs(this._animatedValueY) > Math.abs(this._animatedValueX) && Math.abs(this._animatedValueY) > overlayOpacityVerticalThreshold) {
-      if (this._animatedValueY > 0) isSwipingBottom = true
+    } else if (Math.abs(y) > Math.abs(x) && Math.abs(y) > overlayOpacityVerticalThreshold) {
+      if (y > 0) isSwipingBottom = true
       else isSwipingTop = true
     }
 
@@ -188,35 +212,53 @@ class Swiper extends Component {
 
     const { onTapCardDeadZone } = this.props
     if (
-      this._animatedValueX < -onTapCardDeadZone ||
-      this._animatedValueX > onTapCardDeadZone ||
-      this._animatedValueY < -onTapCardDeadZone ||
-      this._animatedValueY > onTapCardDeadZone
+      x < -onTapCardDeadZone ||
+      x > onTapCardDeadZone ||
+      y < -onTapCardDeadZone ||
+      y > onTapCardDeadZone
     ) {
-      this.setState({
-        slideGesture: true
-      })
+      this.setState({ slideGesture: true })
     }
-
-    return Animated.event([null, this.createAnimatedEvent()], { useNativeDriver: false })(
-      event,
-      gestureState
-    )
   }
 
-  onPanResponderGrant = (event, gestureState) => {
-    this.props.dragStart && this.props.dragStart()
-    if (!this.state.panResponderLocked) {
-      this.state.pan.setOffset({
-        x: 0,
-        y: 0
-      })
+  onGestureEnd = (dx, dy, velocityX, velocityY) => {
+    this.props.dragEnd && this.props.dragEnd()
+
+    if (this.state.panResponderLocked) {
+      this.state.pan.setValue({ x: 0, y: 0 })
+      this.state.pan.setOffset({ x: 0, y: 0 })
+      return
     }
 
-    this.state.pan.setValue({
-      x: 0,
-      y: 0
+    const { horizontalThreshold, verticalThreshold } = this.props
+    const x = this.props.horizontalSwipe ? dx : 0
+    const y = this.props.verticalSwipe ? dy : 0
+
+    const animatedValueX = Math.abs(x)
+    const animatedValueY = Math.abs(y)
+
+    const isSwiping =
+      animatedValueX > horizontalThreshold || animatedValueY > verticalThreshold
+
+    if (isSwiping && this.validPanResponderRelease()) {
+      const onSwipeDirectionCallback = this.getOnSwipeDirectionCallback(x, y)
+      this.swipeCard(onSwipeDirectionCallback)
+    } else {
+      this.resetTopCard()
+    }
+
+    if (!this.state.slideGesture) {
+      this.props.onTapCard(this.state.firstCardIndex)
+    }
+
+    this.setState({
+      labelType: LABEL_TYPES.NONE,
+      slideGesture: false
     })
+  }
+
+  onDimensionsChange = () => {
+    this.forceUpdate()
   }
 
   validPanResponderRelease = () => {
@@ -240,50 +282,6 @@ class Swiper extends Component {
       (isSwipingTop && !disableTopSwipe) ||
       (isSwipingBottom && !disableBottomSwipe)
     )
-  }
-
-  onPanResponderRelease = (e, gestureState) => {
-    this.props.dragEnd && this.props.dragEnd()
-    if (this.state.panResponderLocked) {
-      this.state.pan.setValue({
-        x: 0,
-        y: 0
-      })
-      this.state.pan.setOffset({
-        x: 0,
-        y: 0
-      })
-
-      return
-    }
-
-    const { horizontalThreshold, verticalThreshold } = this.props
-
-    const animatedValueX = Math.abs(this._animatedValueX)
-    const animatedValueY = Math.abs(this._animatedValueY)
-
-    const isSwiping =
-      animatedValueX > horizontalThreshold || animatedValueY > verticalThreshold
-
-    if (isSwiping && this.validPanResponderRelease()) {
-      const onSwipeDirectionCallback = this.getOnSwipeDirectionCallback(
-        this._animatedValueX,
-        this._animatedValueY
-      )
-
-      this.swipeCard(onSwipeDirectionCallback)
-    } else {
-      this.resetTopCard()
-    }
-
-    if (!this.state.slideGesture) {
-      this.props.onTapCard(this.state.firstCardIndex)
-    }
-
-    this.setState({
-      labelType: LABEL_TYPES.NONE,
-      slideGesture: false
-    })
   }
 
   getOnSwipeDirectionCallback = (animatedValueX, animatedValueY) => {
@@ -423,20 +421,40 @@ class Swiper extends Component {
       duration: this.props.swipeAnimationDuration,
       useNativeDriver: true
     }).start(() => {
-      this.setSwipeBackCardXY(x, y, () => {
-        mustDecrementCardIndex = mustDecrementCardIndex
-          ? true
-          : this.mustDecrementCardIndex(
-            this._animatedValueX,
-            this._animatedValueY
-          )
+      // Animation completed - card is off-screen and invisible
+      // Update z-indexes immediately
+      const { swipedCount } = this.state
+      const { stackSize } = this.props
+      const swipedSlot = swipedCount % stackSize
+      const newTopSlot = (swipedCount + 1) % stackSize
+      for (let i = 0; i < stackSize; i++) {
+        const distanceFromTop = (i - newTopSlot + stackSize) % stackSize
+        this._slotZIndexes[i] = stackSize - distanceFromTop
+      }
 
-        if (mustDecrementCardIndex) {
-          this.decrementCardIndex(onSwiped)
-        } else {
-          this.incrementCardIndex(onSwiped)
-        }
-      })
+      // Set swiped slot opacity to 0 (it will fade in after pan reset)
+      this._slotOpacities[swipedSlot].setValue(0)
+
+      // Force re-render to apply z-index and opacity=0
+      this.forceUpdate()
+
+      // Small delay to ensure z-index and opacity are visually applied before pan reset
+      setTimeout(() => {
+        this.setSwipeBackCardXY(x, y, () => {
+          mustDecrementCardIndex = mustDecrementCardIndex
+            ? true
+            : this.mustDecrementCardIndex(
+                this._animatedValueX,
+                this._animatedValueY
+              )
+
+          if (mustDecrementCardIndex) {
+            this.decrementCardIndex(onSwiped)
+          } else {
+            this.incrementCardIndex(onSwiped)
+          }
+        })
+      }, 20)
     })
   }
 
@@ -564,13 +582,43 @@ class Swiper extends Component {
 
   setCardIndex = (newCardIndex, swipedAllCards) => {
     if (this._mounted) {
+      const { swipedCount } = this.state
+      const { stackSize, cards, renderCard } = this.props
+
+      // The slot that was just swiped (goes to bottom)
+      const swipedSlot = swipedCount % stackSize
+
+      // Z-indexes were already updated in swipeCard() before animation started
+      // Just reset pan - the swiped card is already at bottom z-index
+      this.state.pan.setValue({ x: 0, y: 0 })
+      this.state.pan.setOffset({ x: 0, y: 0 })
+      this._animatedValueX = 0
+      this._animatedValueY = 0
+
+      // Only update the cached content for the slot going to the bottom
+      const bottomCardIndex = newCardIndex + stackSize - 1
+      if (bottomCardIndex < cards.length) {
+        this._slotCardIndexes[swipedSlot] = bottomCardIndex
+        this._slotContents[swipedSlot] = renderCard(cards[bottomCardIndex], bottomCardIndex)
+      }
+
       this.setState(
         {
           ...calculateCardIndexes(newCardIndex, this.props.cards),
           swipedAllCards: swipedAllCards,
-          panResponderLocked: false
+          panResponderLocked: false,
+          swipedCount: swipedCount + 1
         },
-        this.resetPanAndScale
+        () => {
+          this.resetPanAndScale()
+
+          // Fade in the swiped slot (now at bottom of stack)
+          Animated.timing(this._slotOpacities[swipedSlot], {
+            toValue: 1,
+            duration: 250,
+            useNativeDriver: true
+          }).start()
+        }
       )
     }
   }
@@ -598,11 +646,11 @@ class Swiper extends Component {
     return { x, y }
   }
 
-  calculateOverlayLabelStyle = () => {
+  calculateOverlayLabelStyle = (isTop = false) => {
     const dynamicStyle = this.props.overlayLabels[this.state.labelType].style
     let overlayLabelStyle = dynamicStyle ? dynamicStyle.label : {}
 
-    if (this.state.labelType === LABEL_TYPES.NONE) {
+    if (this.state.labelType === LABEL_TYPES.NONE || !isTop) {
       overlayLabelStyle = styles.hideOverlayLabel
     }
 
@@ -669,7 +717,7 @@ class Swiper extends Component {
     const animatedValueY = Math.abs(this._animatedValueY)
     let opacity
 
-    if (animatedValueX > animatedValueY) {
+    if (animatedValueX > animatedValueY || true) {
       opacity = this.state.pan.x.interpolate({
         inputRange: this.props.inputCardOpacityRangeX,
         outputRange: this.props.outputCardOpacityRangeX
@@ -689,7 +737,7 @@ class Swiper extends Component {
     const animatedValueY = Math.abs(this._animatedValueY)
     let opacity
 
-    if (animatedValueX > animatedValueY) {
+    if (animatedValueX > animatedValueY || true) {
       opacity = this.state.pan.x.interpolate({
         inputRange: this.props.inputOverlayLabelsOpacityRangeX,
         outputRange: this.props.outputOverlayLabelsOpacityRangeX
@@ -712,24 +760,27 @@ class Swiper extends Component {
 
   render = () => {
     const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID } = this.props
+
     return (
-      <View
-        pointerEvents={pointerEvents}
-        testID={testID}
-        style={[
-          styles.container,
-          {
-            backgroundColor: backgroundColor,
-            marginTop: marginTop,
-            marginBottom: marginBottom
-          },
-          containerStyle
-        ]}
-      >
-        {this.renderChildren()}
-        {swipeBackCard ? this.renderSwipeBackCard() : null}
-        {this.renderStack()}
-      </View>
+      <GestureDetector gesture={this._panGesture}>
+        <View
+          pointerEvents={pointerEvents}
+          testID={testID}
+          style={[
+            styles.container,
+            {
+              backgroundColor: backgroundColor,
+              marginTop: marginTop,
+              marginBottom: marginBottom
+            },
+            containerStyle
+          ]}
+        >
+          {/* {this.renderChildren()}
+          {swipeBackCard ? this.renderSwipeBackCard() : null} */}
+          {this.renderStack()}
+        </View>
+      </GestureDetector>
     )
   }
 
@@ -767,41 +818,132 @@ class Swiper extends Component {
     const stackCard = this.props.renderCard(cards[index], index)
     const swipableCardStyle = this.calculateSwipableCardStyle()
     const renderOverlayLabel = this.renderOverlayLabel()
-    renderedCards.push(
-      <Animated.View
-        key={key}
-        style={firstCard ? swipableCardStyle : stackCardZoomStyle}
-        {...this._panResponder.panHandlers}
-      >
-        {firstCard ? renderOverlayLabel : null}
-        {stackCard}
-      </Animated.View>
+
+    if (firstCard) {
+      renderedCards.push(
+        <Animated.View key={key} style={swipableCardStyle}>
+          {renderOverlayLabel}
+          {stackCard}
+        </Animated.View>
+      )
+    } else {
+      renderedCards.push(
+        <Animated.View key={key} style={stackCardZoomStyle}>
+          {stackCard}
+        </Animated.View>
+      )
+    }
+  }
+
+  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard, position) => {
+    // Use cached content - this never changes except when slot goes to bottom
+    const stackCard = this._slotContents[slot]
+    if (!stackCard) return
+
+    // Get z-index for this slot (regular number, updated in swipeCard before animation)
+    const slotZIndex = this._slotZIndexes[slot]
+    const renderOverlayLabel = this.renderOverlayLabel(isTopCard)
+
+    // DEBUG: Show slot number on each card
+    const debugLabel = (
+      <View style={debugStyles.debugContainer}>
+        <Text style={debugStyles.debugText}>{slot}</Text>
+      </View>
     )
+
+    if (isTopCard) {
+      // Top card uses pan transform and overlay
+      const swipeOpacity = this.props.animateCardOpacity
+        ? this.interpolateCardOpacity()
+        : 1
+      const rotation = this.interpolateRotation()
+
+      // Combine swipe opacity with slot opacity (for fade-in effect)
+      const combinedOpacity = this.props.animateCardOpacity
+        ? Animated.multiply(swipeOpacity, this._slotOpacities[slot])
+        : this._slotOpacities[slot]
+
+      const topCardStyle = [
+        styles.card,
+        this.getCardStyle(),
+        {
+          zIndex: slotZIndex,
+          opacity: combinedOpacity,
+          transform: [
+            { translateX: this.state.pan.x },
+            { translateY: this.state.pan.y },
+            { rotate: rotation }
+          ]
+        },
+        this.props.cardStyle
+      ]
+
+      renderedCards.push(
+        <Animated.View key={key} style={topCardStyle}>
+          {renderOverlayLabel}
+          {stackCard}
+          {debugLabel}
+        </Animated.View>
+      )
+    } else {
+      // Stack cards use z-index, slot opacity, and scale/position for stacking effect
+      const stackCardStyle = [
+        styles.card,
+        this.getCardStyle(),
+        {
+          zIndex: slotZIndex,
+          opacity: this._slotOpacities[slot],
+          transform: [
+            { scale: this.state[`stackScale${position}`] },
+            { translateY: this.state[`stackPosition${position}`] }
+          ]
+        },
+        this.props.cardStyle
+      ]
+
+      renderedCards.push(
+        <Animated.View key={key} style={stackCardStyle}>
+          {renderOverlayLabel}
+          {stackCard}
+          {debugLabel}
+        </Animated.View>
+      )
+    }
   }
 
   renderStack = () => {
-    const { firstCardIndex, swipedAllCards } = this.state
-    const { cards } = this.props
-    const renderedCards = []
-    let { stackSize, infinite, showSecondCard } = this.props
-    let index = firstCardIndex
-    let firstCard = true
-    let cardPosition = 0
+    const { swipedAllCards, swipedCount } = this.state
+    const { stackSize, showSecondCard } = this.props
 
-    while (stackSize-- > 0 && (firstCard || showSecondCard) && !swipedAllCards) {
-      const key = this.getCardKey(cards[index], index)
-      this.pushCardToStack(renderedCards, index, cardPosition, key, firstCard)
-
-      firstCard = false
-
-      if (index === cards.length - 1) {
-        if (!infinite) break
-        index = 0
-      } else {
-        index++
-      }
-      cardPosition++
+    if (swipedAllCards) {
+      return []
     }
+
+    // Which slot is currently on top?
+    const topSlot = swipedCount % stackSize
+
+    // Render all slots - z-index is handled by Animated.Value
+    const renderedCards = []
+    for (let slot = 0; slot < stackSize; slot++) {
+      // Skip if no cached content
+      if (!this._slotContents[slot]) {
+        continue
+      }
+
+      const isTopCard = slot === topSlot
+
+      // Skip non-top cards if showSecondCard is false
+      if (!isTopCard && !showSecondCard) {
+        continue
+      }
+
+      // Calculate this slot's position in the stack (0 = top, 1 = second, etc.)
+      const position = (slot - topSlot + stackSize) % stackSize
+
+      const stableKey = `slot-${slot}`
+      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard, position)
+    }
+
     return renderedCards
   }
 
@@ -819,7 +961,7 @@ class Swiper extends Component {
     )
   }
 
-  renderOverlayLabel = () => {
+  renderOverlayLabel = (isTop = false) => {
     const {
       disableBottomSwipe,
       disableLeftSwipe,
@@ -849,7 +991,7 @@ class Swiper extends Component {
     return (
       <Animated.View style={this.calculateOverlayLabelWrapperStyle()}>
         {!overlayLabels[labelType].element &&
-          <Text style={this.calculateOverlayLabelStyle()}>
+          <Text style={this.calculateOverlayLabelStyle(isTop)}>
             {overlayLabels[labelType].title}
           </Text>
         }
@@ -1032,5 +1174,25 @@ Swiper.defaultProps = {
   zoomAnimationDuration: 100,
   zoomFriction: 7
 }
+
+const debugStyles = StyleSheet.create({
+  debugContainer: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: 'rgba(255, 0, 0, 0.8)',
+    borderRadius: 15,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 100
+  },
+  debugText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold'
+  }
+})
 
 export default Swiper
