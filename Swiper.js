@@ -1,7 +1,7 @@
-import React, { Component } from 'react'
-import { Text, View, Dimensions, Animated, InteractionManager, StyleSheet } from 'react-native'
-import PropTypes from 'prop-types'
 import isEqual from 'lodash/isEqual'
+import PropTypes from 'prop-types'
+import React, { Component } from 'react'
+import { Animated, Dimensions, InteractionManager, StyleSheet, Text, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 
 import styles from './styles'
@@ -619,11 +619,11 @@ class Swiper extends Component {
     return { x, y }
   }
 
-  calculateOverlayLabelStyle = () => {
+  calculateOverlayLabelStyle = (isTop = false) => {
     const dynamicStyle = this.props.overlayLabels[this.state.labelType].style
     let overlayLabelStyle = dynamicStyle ? dynamicStyle.label : {}
 
-    if (this.state.labelType === LABEL_TYPES.NONE) {
+    if (this.state.labelType === LABEL_TYPES.NONE || !isTop) {
       overlayLabelStyle = styles.hideOverlayLabel
     }
 
@@ -749,8 +749,8 @@ class Swiper extends Component {
             containerStyle
           ]}
         >
-          {this.renderChildren()}
-          {swipeBackCard ? this.renderSwipeBackCard() : null}
+          {/* {this.renderChildren()}
+          {swipeBackCard ? this.renderSwipeBackCard() : null} */}
           {this.renderStack()}
         </View>
       </GestureDetector>
@@ -815,7 +815,7 @@ class Swiper extends Component {
 
     // Use Animated z-index - updates synchronously without re-render
     const animatedZIndex = this._slotZIndexes[slot]
-    const renderOverlayLabel = this.renderOverlayLabel()
+    const renderOverlayLabel = this.renderOverlayLabel(isTopCard)
 
     // DEBUG: Show slot number on each card
     const debugLabel = (
@@ -866,6 +866,7 @@ class Swiper extends Component {
 
       renderedCards.push(
         <Animated.View key={key} style={stackCardStyle}>
+          {renderOverlayLabel}
           {stackCard}
           {debugLabel}
         </Animated.View>
@@ -920,7 +921,7 @@ class Swiper extends Component {
     )
   }
 
-  renderOverlayLabel = () => {
+  renderOverlayLabel = (isTop = false) => {
     const {
       disableBottomSwipe,
       disableLeftSwipe,
@@ -950,7 +951,7 @@ class Swiper extends Component {
     return (
       <Animated.View style={this.calculateOverlayLabelWrapperStyle()}>
         {!overlayLabels[labelType].element &&
-          <Text style={this.calculateOverlayLabelStyle()}>
+          <Text style={this.calculateOverlayLabelStyle(isTop)}>
             {overlayLabels[labelType].title}
           </Text>
         }
