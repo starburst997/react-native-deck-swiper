@@ -65,6 +65,23 @@ class Swiper extends Component {
     this.initializeGesture()
   }
 
+  initializeGesture = () => {
+    this._panGesture = Gesture.Pan()
+      .runOnJS(true)
+      .onStart(() => {
+        this.onGestureStart()
+      })
+      .onUpdate((event) => {
+        this.onGestureMove(event.translationX, event.translationY)
+      })
+      .onEnd((event) => {
+        this.onGestureEnd(event.translationX, event.translationY, event.velocityX, event.velocityY)
+      })
+      .minDistance(5)
+      .activeOffsetX([-10, 10])
+      .activeOffsetY([-10, 10])
+  }
+
   shouldComponentUpdate = (nextProps, nextState) => {
     const { props, state } = this
     const propsChanged = (
@@ -116,26 +133,6 @@ class Swiper extends Component {
   initializeCardStyle = () => {
     // this.forceUpdate()
     this.dimensionsChangeSubscription = Dimensions.addEventListener('change', this.onDimensionsChange)
-  }
-
-  initializeGesture = () => {
-    // Create RNGH Pan gesture
-    // Using .runOnJS(true) to run callbacks on JS thread, avoiding worklet serialization issues
-    this._panGesture = Gesture.Pan()
-      .runOnJS(true)
-      .onStart(() => {
-        this.onGestureStart()
-      })
-      .onUpdate((event) => {
-        this.onGestureMove(event.translationX, event.translationY)
-      })
-      .onEnd((event) => {
-        this.onGestureEnd(event.translationX, event.translationY, event.velocityX, event.velocityY)
-      })
-      .minDistance(5)
-      .activeOffsetX([-10, 10])
-      .activeOffsetY([-10, 10])
-      .enabled(true)
   }
 
   onGestureStart = () => {
@@ -692,23 +689,25 @@ class Swiper extends Component {
     const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID } = this.props
 
     return (
-      <View
-        pointerEvents={pointerEvents}
-        testID={testID}
-        style={[
-          styles.container,
-          {
-            backgroundColor: backgroundColor,
-            marginTop: marginTop,
-            marginBottom: marginBottom
-          },
-          containerStyle
-        ]}
-      >
-        {this.renderChildren()}
-        {swipeBackCard ? this.renderSwipeBackCard() : null}
-        {this.renderStack()}
-      </View>
+      <GestureDetector gesture={this._panGesture}>
+        <View
+          pointerEvents={pointerEvents}
+          testID={testID}
+          style={[
+            styles.container,
+            {
+              backgroundColor: backgroundColor,
+              marginTop: marginTop,
+              marginBottom: marginBottom
+            },
+            containerStyle
+          ]}
+        >
+          {this.renderChildren()}
+          {swipeBackCard ? this.renderSwipeBackCard() : null}
+          {this.renderStack()}
+        </View>
+      </GestureDetector>
     )
   }
 
@@ -747,23 +746,16 @@ class Swiper extends Component {
     const swipableCardStyle = this.calculateSwipableCardStyle()
     const renderOverlayLabel = this.renderOverlayLabel()
 
-    // First card (top of stack) gets gesture handling
     if (firstCard) {
       renderedCards.push(
-        <GestureDetector key={key} gesture={this._panGesture}>
-          <Animated.View style={swipableCardStyle}>
-            {renderOverlayLabel}
-            {stackCard}
-          </Animated.View>
-        </GestureDetector>
+        <Animated.View key={key} style={swipableCardStyle}>
+          {renderOverlayLabel}
+          {stackCard}
+        </Animated.View>
       )
     } else {
-      // Other cards in the stack don't need gesture handling
       renderedCards.push(
-        <Animated.View
-          key={key}
-          style={stackCardZoomStyle}
-        >
+        <Animated.View key={key} style={stackCardZoomStyle}>
           {stackCard}
         </Animated.View>
       )
