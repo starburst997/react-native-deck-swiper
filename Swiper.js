@@ -60,6 +60,11 @@ class Swiper extends Component {
     this._animatedValueX = 0
     this._animatedValueY = 0
 
+    // Animated z-index for each slot - can be updated synchronously before pan reset
+    this._slotZIndexes = Array.from({ length: props.stackSize }, (_, i) =>
+      new Animated.Value(props.stackSize - i) // slot 0 = highest, slot 1 = second, etc.
+    )
+
     // Cache rendered card content - only update when slot goes to bottom
     this._slotCardIndexes = Array.from({ length: props.stackSize }, (_, i) => props.cardIndex + i)
     this._slotContents = Array.from({ length: props.stackSize }, (_, i) => {
@@ -552,17 +557,25 @@ class Swiper extends Component {
 
   setCardIndex = (newCardIndex, swipedAllCards) => {
     if (this._mounted) {
-      // Reset pan BEFORE updating indexes so new first card starts at 0,0
-      this.state.pan.setValue({ x: 0, y: 0 })
-      this.state.pan.setOffset({ x: 0, y: 0 })
-      this._animatedValueX = 0
-      this._animatedValueY = 0
-
       const { swipedCount } = this.state
       const { stackSize, cards, renderCard } = this.props
 
       // The slot that was just swiped (goes to bottom)
       const swipedSlot = swipedCount % stackSize
+      const newTopSlot = (swipedCount + 1) % stackSize
+
+      // UPDATE Z-INDEXES FIRST (synchronously) - BEFORE resetting pan!
+      // This ensures the swiped card is at bottom z-index before it snaps back to 0,0
+      for (let i = 0; i < stackSize; i++) {
+        const distanceFromTop = (i - newTopSlot + stackSize) % stackSize
+        this._slotZIndexes[i].setValue(stackSize - distanceFromTop)
+      }
+
+      // NOW reset pan - swiped card is already at bottom z-index, so it won't flash on top
+      this.state.pan.setValue({ x: 0, y: 0 })
+      this.state.pan.setOffset({ x: 0, y: 0 })
+      this._animatedValueX = 0
+      this._animatedValueY = 0
 
       // Only update the cached content for the slot going to the bottom
       const bottomCardIndex = newCardIndex + stackSize - 1
@@ -795,11 +808,13 @@ class Swiper extends Component {
     }
   }
 
-  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard, zIndex) => {
+  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard) => {
     // Use cached content - this never changes except when slot goes to bottom
     const stackCard = this._slotContents[slot]
     if (!stackCard) return
 
+    // Use Animated z-index - updates synchronously without re-render
+    const animatedZIndex = this._slotZIndexes[slot]
     const renderOverlayLabel = this.renderOverlayLabel()
 
     if (isTopCard) {
@@ -813,7 +828,7 @@ class Swiper extends Component {
         styles.card,
         this.getCardStyle(),
         {
-          zIndex: zIndex,
+          zIndex: animatedZIndex,
           opacity: opacity,
           transform: [
             { translateX: this.state.pan.x },
@@ -836,7 +851,7 @@ class Swiper extends Component {
         styles.card,
         this.getCardStyle(),
         {
-          zIndex: zIndex
+          zIndex: animatedZIndex
         },
         this.props.cardStyle
       ]
@@ -852,19 +867,16 @@ class Swiper extends Component {
   renderStack = () => {
     const { swipedAllCards, swipedCount } = this.state
     const { stackSize, showSecondCard } = this.props
-    const slotsToRender = []
 
     if (swipedAllCards) {
       return []
     }
 
-    // Which slot is currently on top? It rotates with each swipe.
-    // At swipedCount=0, slot 0 is on top
-    // At swipedCount=1, slot 1 is on top
-    // etc.
+    // Which slot is currently on top?
     const topSlot = swipedCount % stackSize
 
-    // Collect slot info for rendering
+    // Render all slots - z-index is handled by Animated.Value
+    const renderedCards = []
     for (let slot = 0; slot < stackSize; slot++) {
       // Skip if no cached content
       if (!this._slotContents[slot]) {
@@ -878,21 +890,8 @@ class Swiper extends Component {
         continue
       }
 
-      // Calculate z-index: top card gets highest, others based on distance from top
-      const distanceFromTop = (slot - topSlot + stackSize) % stackSize
-      const zIndex = stackSize - distanceFromTop
-
-      slotsToRender.push({ slot, isTopCard, zIndex })
-    }
-
-    // Sort by z-index ascending so highest z-index renders LAST (on top)
-    slotsToRender.sort((a, b) => a.zIndex - b.zIndex)
-
-    // Render in sorted order - pass slot number, cached content is used
-    const renderedCards = []
-    for (const { slot, isTopCard, zIndex } of slotsToRender) {
       const stableKey = `slot-${slot}`
-      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard, zIndex)
+      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard)
     }
 
     return renderedCards
