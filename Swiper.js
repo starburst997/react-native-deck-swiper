@@ -190,7 +190,7 @@ class Swiper extends Component {
 
     let isSwipingLeft, isSwipingRight, isSwipingTop, isSwipingBottom
 
-    if (Math.abs(x) > Math.abs(y) && Math.abs(x) > overlayOpacityHorizontalThreshold) {
+    if (Math.abs(x) > Math.abs(y) && Math.abs(x) > overlayOpacityHorizontalThreshold || true) {
       if (x > 0) isSwipingRight = true
       else isSwipingLeft = true
     } else if (Math.abs(y) > Math.abs(x) && Math.abs(y) > overlayOpacityVerticalThreshold) {
@@ -717,7 +717,7 @@ class Swiper extends Component {
     const animatedValueY = Math.abs(this._animatedValueY)
     let opacity
 
-    if (animatedValueX > animatedValueY) {
+    if (animatedValueX > animatedValueY || true) {
       opacity = this.state.pan.x.interpolate({
         inputRange: this.props.inputCardOpacityRangeX,
         outputRange: this.props.outputCardOpacityRangeX
@@ -737,7 +737,7 @@ class Swiper extends Component {
     const animatedValueY = Math.abs(this._animatedValueY)
     let opacity
 
-    if (animatedValueX > animatedValueY) {
+    if (animatedValueX > animatedValueY || true) {
       opacity = this.state.pan.x.interpolate({
         inputRange: this.props.inputOverlayLabelsOpacityRangeX,
         outputRange: this.props.outputOverlayLabelsOpacityRangeX
