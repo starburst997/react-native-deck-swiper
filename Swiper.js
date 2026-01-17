@@ -76,8 +76,9 @@ class Swiper extends Component {
       const cardIndex = props.cardIndex + i
       if (cardIndex < props.cards.length) {
         return props.renderCard(props.cards[cardIndex], cardIndex)
+      } else {
+        return props.renderCard(props.cards[props.cards.length - 1], props.cards.length - 1)
       }
-      return null
     })
 
     this.state.pan.x.addListener(value => (this._animatedValueX = value.value))
@@ -600,6 +601,9 @@ class Swiper extends Component {
       if (bottomCardIndex < cards.length) {
         this._slotCardIndexes[swipedSlot] = bottomCardIndex
         this._slotContents[swipedSlot] = renderCard(cards[bottomCardIndex], bottomCardIndex)
+      } else {
+        this._slotCardIndexes[swipedSlot] = bottomCardIndex
+        this._slotContents[swipedSlot] = renderCard(cards[cards.length - 1], cards.length - 1)
       }
 
       this.setState(
