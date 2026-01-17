@@ -835,7 +835,7 @@ class Swiper extends Component {
     }
   }
 
-  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard) => {
+  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard, position) => {
     // Use cached content - this never changes except when slot goes to bottom
     const stackCard = this._slotContents[slot]
     if (!stackCard) return
@@ -886,13 +886,17 @@ class Swiper extends Component {
         </Animated.View>
       )
     } else {
-      // Stack cards use z-index and slot opacity (for fade-in after swipe)
+      // Stack cards use z-index, slot opacity, and scale/position for stacking effect
       const stackCardStyle = [
         styles.card,
         this.getCardStyle(),
         {
           zIndex: slotZIndex,
-          opacity: this._slotOpacities[slot]
+          opacity: this._slotOpacities[slot],
+          transform: [
+            { scale: this.state[`stackScale${position}`] },
+            { translateY: this.state[`stackPosition${position}`] }
+          ]
         },
         this.props.cardStyle
       ]
@@ -933,8 +937,11 @@ class Swiper extends Component {
         continue
       }
 
+      // Calculate this slot's position in the stack (0 = top, 1 = second, etc.)
+      const position = (slot - topSlot + stackSize) % stackSize
+
       const stableKey = `slot-${slot}`
-      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard)
+      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard, position)
     }
 
     return renderedCards
