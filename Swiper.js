@@ -835,7 +835,7 @@ class Swiper extends Component {
     }
   }
 
-  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard, position) => {
+  pushCardToStackWithZIndex = (renderedCards, slot, key, isTopCard, position, isValidCard) => {
     // Use cached content - this never changes except when slot goes to bottom
     const stackCard = this._slotContents[slot]
     if (!stackCard) return
@@ -887,12 +887,13 @@ class Swiper extends Component {
       )
     } else {
       // Stack cards use z-index, slot opacity, and scale/position for stacking effect
+      // Hide cards that don't have valid card data (beyond the end of the deck)
       const stackCardStyle = [
         styles.card,
         this.getCardStyle(),
         {
           zIndex: slotZIndex,
-          opacity: this._slotOpacities[slot],
+          opacity: isValidCard ? this._slotOpacities[slot] : 0,
           transform: [
             { scale: this.state[`stackScale${position}`] },
             { translateY: this.state[`stackPosition${position}`] }
@@ -912,8 +913,8 @@ class Swiper extends Component {
   }
 
   renderStack = () => {
-    const { swipedAllCards, swipedCount } = this.state
-    const { stackSize, showSecondCard } = this.props
+    const { swipedAllCards, swipedCount, firstCardIndex } = this.state
+    const { stackSize, showSecondCard, cards } = this.props
 
     if (swipedAllCards) {
       return []
@@ -940,8 +941,13 @@ class Swiper extends Component {
       // Calculate this slot's position in the stack (0 = top, 1 = second, etc.)
       const position = (slot - topSlot + stackSize) % stackSize
 
+      // Check if a card should exist at this stack position
+      // The expected card index is firstCardIndex + position (0 for top, 1 for second, etc.)
+      const expectedCardIndex = firstCardIndex + position
+      const isValidCard = expectedCardIndex < cards.length
+
       const stableKey = `slot-${slot}`
-      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard, position)
+      this.pushCardToStackWithZIndex(renderedCards, slot, stableKey, isTopCard, position, isValidCard)
     }
 
     return renderedCards
