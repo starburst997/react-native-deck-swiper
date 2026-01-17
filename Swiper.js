@@ -14,7 +14,7 @@ const LABEL_TYPES = {
   TOP: 'top',
   BOTTOM: 'bottom'
 }
-const SWIPE_MULTIPLY_FACTOR = 7
+const SWIPE_MULTIPLY_FACTOR = 4
 
 const calculateCardIndexes = (firstCardIndex, cards) => {
   firstCardIndex = firstCardIndex || 0
