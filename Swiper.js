@@ -882,7 +882,7 @@ class Swiper extends Component {
         <Animated.View key={key} style={topCardStyle}>
           {renderOverlayLabel}
           {stackCard}
-          {debugLabel}
+          {/* {debugLabel} */}
         </Animated.View>
       )
     } else {
@@ -905,7 +905,7 @@ class Swiper extends Component {
         <Animated.View key={key} style={stackCardStyle}>
           {renderOverlayLabel}
           {stackCard}
-          {debugLabel}
+          {/* {debugLabel} */}
         </Animated.View>
       )
     }
