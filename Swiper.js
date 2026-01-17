@@ -689,25 +689,36 @@ class Swiper extends Component {
     const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID } = this.props
 
     return (
-      <GestureDetector gesture={this._panGesture}>
-        <View
-          pointerEvents={pointerEvents}
-          testID={testID}
-          style={[
-            styles.container,
-            {
-              backgroundColor: backgroundColor,
-              marginTop: marginTop,
-              marginBottom: marginBottom
-            },
-            containerStyle
-          ]}
-        >
-          {this.renderChildren()}
-          {swipeBackCard ? this.renderSwipeBackCard() : null}
-          {this.renderStack()}
-        </View>
-      </GestureDetector>
+      <View
+        pointerEvents={pointerEvents}
+        testID={testID}
+        style={[
+          styles.container,
+          {
+            backgroundColor: backgroundColor,
+            marginTop: marginTop,
+            marginBottom: marginBottom
+          },
+          containerStyle
+        ]}
+      >
+        {this.renderChildren()}
+        {swipeBackCard ? this.renderSwipeBackCard() : null}
+        {this.renderStack()}
+        {/* Transparent gesture overlay - captures touches without affecting card order */}
+        <GestureDetector gesture={this._panGesture}>
+          <Animated.View
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              backgroundColor: 'transparent'
+            }}
+          />
+        </GestureDetector>
+      </View>
     )
   }
 
@@ -785,8 +796,7 @@ class Swiper extends Component {
       }
       cardPosition++
     }
-    // Reverse so the first card (top of stack) is rendered last and appears on top
-    return renderedCards.reverse()
+    return renderedCards
   }
 
   renderSwipeBackCard = () => {
