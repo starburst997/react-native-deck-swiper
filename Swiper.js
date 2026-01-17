@@ -65,6 +65,11 @@ class Swiper extends Component {
       props.stackSize - i // slot 0 = highest, slot 1 = second, etc.
     )
 
+    // Animated opacity for each slot - used for fade-in when card returns to bottom of stack
+    this._slotOpacities = Array.from({ length: props.stackSize }, () =>
+      new Animated.Value(1)
+    )
+
     // Cache rendered card content - only update when slot goes to bottom
     this._slotCardIndexes = Array.from({ length: props.stackSize }, (_, i) => props.cardIndex + i)
     this._slotContents = Array.from({ length: props.stackSize }, (_, i) => {
@@ -420,15 +425,20 @@ class Swiper extends Component {
       // Update z-indexes immediately
       const { swipedCount } = this.state
       const { stackSize } = this.props
+      const swipedSlot = swipedCount % stackSize
       const newTopSlot = (swipedCount + 1) % stackSize
       for (let i = 0; i < stackSize; i++) {
         const distanceFromTop = (i - newTopSlot + stackSize) % stackSize
         this._slotZIndexes[i] = stackSize - distanceFromTop
       }
-      // Force re-render to apply z-index
+
+      // Set swiped slot opacity to 0 (it will fade in after pan reset)
+      this._slotOpacities[swipedSlot].setValue(0)
+
+      // Force re-render to apply z-index and opacity=0
       this.forceUpdate()
 
-      // Small delay to ensure z-index is visually applied before pan reset
+      // Small delay to ensure z-index and opacity are visually applied before pan reset
       setTimeout(() => {
         this.setSwipeBackCardXY(x, y, () => {
           mustDecrementCardIndex = mustDecrementCardIndex
@@ -599,7 +609,16 @@ class Swiper extends Component {
           panResponderLocked: false,
           swipedCount: swipedCount + 1
         },
-        this.resetPanAndScale
+        () => {
+          this.resetPanAndScale()
+
+          // Fade in the swiped slot (now at bottom of stack)
+          Animated.timing(this._slotOpacities[swipedSlot], {
+            toValue: 1,
+            duration: 250,
+            useNativeDriver: true
+          }).start()
+        }
       )
     }
   }
@@ -834,17 +853,22 @@ class Swiper extends Component {
 
     if (isTopCard) {
       // Top card uses pan transform and overlay
-      const opacity = this.props.animateCardOpacity
+      const swipeOpacity = this.props.animateCardOpacity
         ? this.interpolateCardOpacity()
         : 1
       const rotation = this.interpolateRotation()
+
+      // Combine swipe opacity with slot opacity (for fade-in effect)
+      const combinedOpacity = this.props.animateCardOpacity
+        ? Animated.multiply(swipeOpacity, this._slotOpacities[slot])
+        : this._slotOpacities[slot]
 
       const topCardStyle = [
         styles.card,
         this.getCardStyle(),
         {
           zIndex: slotZIndex,
-          opacity: opacity,
+          opacity: combinedOpacity,
           transform: [
             { translateX: this.state.pan.x },
             { translateY: this.state.pan.y },
@@ -862,12 +886,13 @@ class Swiper extends Component {
         </Animated.View>
       )
     } else {
-      // Stack cards just use z-index, no transforms
+      // Stack cards use z-index and slot opacity (for fade-in after swipe)
       const stackCardStyle = [
         styles.card,
         this.getCardStyle(),
         {
-          zIndex: slotZIndex
+          zIndex: slotZIndex,
+          opacity: this._slotOpacities[slot]
         },
         this.props.cardStyle
       ]
