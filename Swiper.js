@@ -539,6 +539,12 @@ class Swiper extends Component {
 
   setCardIndex = (newCardIndex, swipedAllCards) => {
     if (this._mounted) {
+      // Reset pan BEFORE updating indexes so new first card starts at 0,0
+      this.state.pan.setValue({ x: 0, y: 0 })
+      this.state.pan.setOffset({ x: 0, y: 0 })
+      this._animatedValueX = 0
+      this._animatedValueY = 0
+
       this.setState(
         {
           ...calculateCardIndexes(newCardIndex, this.props.cards),
