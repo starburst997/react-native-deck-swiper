@@ -39,6 +39,12 @@ class Swiper extends Component {
   constructor (props) {
     super(props)
 
+    // Initialize slot cards - each slot shows a different card
+    const slotCards = []
+    for (let i = 0; i < props.stackSize; i++) {
+      slotCards.push(props.cardIndex + i)
+    }
+
     this.state = {
       ...calculateCardIndexes(props.cardIndex, props.cards),
       pan: new Animated.ValueXY(),
@@ -51,6 +57,8 @@ class Swiper extends Component {
       slideGesture: false,
       swipeBackXYPositions: [],
       isSwipingBack: false,
+      swipedCount: 0,
+      slotCards: slotCards,
       ...rebuildStackAnimatedValues(props)
     }
 
@@ -93,7 +101,8 @@ class Swiper extends Component {
       nextState.secondCardIndex !== state.secondCardIndex ||
       nextState.previousCardIndex !== state.previousCardIndex ||
       nextState.labelType !== state.labelType ||
-      nextState.swipedAllCards !== state.swipedAllCards
+      nextState.swipedAllCards !== state.swipedAllCards ||
+      nextState.swipedCount !== state.swipedCount
     )
     return propsChanged || stateChanged
   }
@@ -545,11 +554,27 @@ class Swiper extends Component {
       this._animatedValueX = 0
       this._animatedValueY = 0
 
+      const { swipedCount, slotCards } = this.state
+      const { stackSize, cards } = this.props
+
+      // The slot that was just swiped (now goes to bottom)
+      const swipedSlot = swipedCount % stackSize
+
+      // Update that slot to show the card at the bottom of the new visible stack
+      const newSlotCards = [...slotCards]
+      const bottomCardIndex = newCardIndex + stackSize - 1
+      // Only update if there's a card at that index
+      if (bottomCardIndex < cards.length) {
+        newSlotCards[swipedSlot] = bottomCardIndex
+      }
+
       this.setState(
         {
           ...calculateCardIndexes(newCardIndex, this.props.cards),
           swipedAllCards: swipedAllCards,
-          panResponderLocked: false
+          panResponderLocked: false,
+          swipedCount: swipedCount + 1,
+          slotCards: newSlotCards
         },
         this.resetPanAndScale
       )
@@ -769,28 +794,39 @@ class Swiper extends Component {
   }
 
   renderStack = () => {
-    const { firstCardIndex, swipedAllCards } = this.state
-    const { cards } = this.props
+    const { swipedAllCards, swipedCount, slotCards } = this.state
+    const { cards, stackSize, showSecondCard } = this.props
     const renderedCards = []
-    let { stackSize, infinite, showSecondCard } = this.props
-    let index = firstCardIndex
-    let firstCard = true
-    let cardPosition = 0
 
-    while (stackSize-- > 0 && (firstCard || showSecondCard) && !swipedAllCards) {
-      const key = this.getCardKey(cards[index], index)
-      this.pushCardToStack(renderedCards, index, cardPosition, key, firstCard)
-
-      firstCard = false
-
-      if (index === cards.length - 1) {
-        if (!infinite) break
-        index = 0
-      } else {
-        index++
-      }
-      cardPosition++
+    if (swipedAllCards) {
+      return renderedCards
     }
+
+    // Render each slot with a stable key
+    for (let slot = 0; slot < stackSize; slot++) {
+      const cardIndex = slotCards[slot]
+      if (cardIndex === undefined || cardIndex >= cards.length) {
+        continue
+      }
+
+      // Calculate visual position: which slot is on top based on swipedCount
+      // The slot at (swipedCount % stackSize) was just swiped and is now at bottom
+      // So the slot at ((swipedCount) % stackSize) is at position (stackSize - 1)
+      // And the slot at ((swipedCount + 1) % stackSize) is at position 0 (top)
+      const topSlot = (swipedCount) % stackSize
+      const visualPosition = (slot - topSlot + stackSize) % stackSize
+
+      // Skip non-top cards if showSecondCard is false
+      if (visualPosition > 0 && !showSecondCard) {
+        continue
+      }
+
+      const isFirstCard = visualPosition === 0
+      const stableKey = `slot-${slot}`
+
+      this.pushCardToStack(renderedCards, cardIndex, visualPosition, stableKey, isFirstCard)
+    }
+
     return renderedCards
   }
 
