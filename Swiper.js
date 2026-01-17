@@ -1,5 +1,5 @@
 import React, { Component } from 'react'
-import { PanResponder, Text, View, Dimensions, Animated, InteractionManager } from 'react-native'
+import { Text, View, Dimensions, Animated, InteractionManager } from 'react-native'
 import PropTypes from 'prop-types'
 import isEqual from 'lodash/isEqual'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
@@ -62,8 +62,7 @@ class Swiper extends Component {
     this.state.pan.y.addListener(value => (this._animatedValueY = value.value))
 
     this.initializeCardStyle()
-    this.initializePanResponder()
-    this.initializeBlockingGesture()
+    this.initializeGesture()
   }
 
   shouldComponentUpdate = (nextProps, nextState) => {
@@ -119,51 +118,47 @@ class Swiper extends Component {
     this.dimensionsChangeSubscription = Dimensions.addEventListener('change', this.onDimensionsChange)
   }
 
-  initializePanResponder = () => {
-    this._panResponder = PanResponder.create({
-      onStartShouldSetPanResponder: (event, gestureState) => true,
-      onMoveShouldSetPanResponder: (event, gestureState) => false,
-
-      onMoveShouldSetPanResponderCapture: (evt, gestureState) => {
-        const isVerticalSwipe = Math.sqrt(
-          Math.pow(gestureState.dx, 2) < Math.pow(gestureState.dy, 2)
-        )
-        if (!this.props.verticalSwipe && isVerticalSwipe) {
-          return false
-        }
-        return Math.sqrt(Math.pow(gestureState.dx, 2) + Math.pow(gestureState.dy, 2)) > 10
-      },
-      onPanResponderGrant: this.onPanResponderGrant,
-      onPanResponderMove: this.onPanResponderMove,
-      onPanResponderRelease: this.onPanResponderRelease,
-      onPanResponderTerminate: this.onPanResponderRelease,
-      // Block parent gestures from stealing the responder
-      onPanResponderTerminationRequest: () => !this.props.blockParentGestures
-    })
+  initializeGesture = () => {
+    // Create RNGH Pan gesture
+    // Using .runOnJS(true) to run callbacks on JS thread, avoiding worklet serialization issues
+    this._panGesture = Gesture.Pan()
+      .runOnJS(true)
+      .onStart(() => {
+        this.onGestureStart()
+      })
+      .onUpdate((event) => {
+        this.onGestureMove(event.translationX, event.translationY)
+      })
+      .onEnd((event) => {
+        this.onGestureEnd(event.translationX, event.translationY, event.velocityX, event.velocityY)
+      })
+      .minDistance(5)
+      .activeOffsetX([-10, 10])
+      .activeOffsetY([-10, 10])
+      .enabled(true)
   }
 
-  // Create a native gesture that blocks external gestures (like modal dismiss)
-  initializeBlockingGesture = () => {
-    this._blockingGesture = Gesture.Pan()
-      // Activate quickly to capture the gesture before parent
-      .minDistance(0)
-      .enabled(this.props.blockParentGestures)
+  onGestureStart = () => {
+    this.props.dragStart && this.props.dragStart()
+    if (!this.state.panResponderLocked) {
+      this.state.pan.setOffset({ x: 0, y: 0 })
+    }
+    this.state.pan.setValue({ x: 0, y: 0 })
   }
 
-  createAnimatedEvent = () => {
+  onGestureMove = (dx, dy) => {
     const { horizontalSwipe, verticalSwipe } = this.props
-    const { x, y } = this.state.pan
-    const dx = horizontalSwipe ? x : new Animated.Value(0)
-    const dy = verticalSwipe ? y : new Animated.Value(0)
-    return { dx, dy }
-  }
 
-  onDimensionsChange = () => {
-    this.forceUpdate()
-  }
+    // Update the animated values
+    const x = horizontalSwipe ? dx : 0
+    const y = verticalSwipe ? dy : 0
+    this.state.pan.setValue({ x, y })
 
-  onPanResponderMove = (event, gestureState) => {
-    this.props.onSwiping(this._animatedValueX, this._animatedValueY)
+    // Update internal tracking
+    this._animatedValueX = x
+    this._animatedValueY = y
+
+    this.props.onSwiping(x, y)
 
     let { overlayOpacityHorizontalThreshold, overlayOpacityVerticalThreshold } = this.props
     if (!overlayOpacityHorizontalThreshold) {
@@ -173,16 +168,13 @@ class Swiper extends Component {
       overlayOpacityVerticalThreshold = this.props.verticalThreshold
     }
 
-    let isSwipingLeft,
-      isSwipingRight,
-      isSwipingTop,
-      isSwipingBottom
+    let isSwipingLeft, isSwipingRight, isSwipingTop, isSwipingBottom
 
-    if (Math.abs(this._animatedValueX) > Math.abs(this._animatedValueY) && Math.abs(this._animatedValueX) > overlayOpacityHorizontalThreshold) {
-      if (this._animatedValueX > 0) isSwipingRight = true
+    if (Math.abs(x) > Math.abs(y) && Math.abs(x) > overlayOpacityHorizontalThreshold) {
+      if (x > 0) isSwipingRight = true
       else isSwipingLeft = true
-    } else if (Math.abs(this._animatedValueY) > Math.abs(this._animatedValueX) && Math.abs(this._animatedValueY) > overlayOpacityVerticalThreshold) {
-      if (this._animatedValueY > 0) isSwipingBottom = true
+    } else if (Math.abs(y) > Math.abs(x) && Math.abs(y) > overlayOpacityVerticalThreshold) {
+      if (y > 0) isSwipingBottom = true
       else isSwipingTop = true
     }
 
@@ -200,35 +192,53 @@ class Swiper extends Component {
 
     const { onTapCardDeadZone } = this.props
     if (
-      this._animatedValueX < -onTapCardDeadZone ||
-      this._animatedValueX > onTapCardDeadZone ||
-      this._animatedValueY < -onTapCardDeadZone ||
-      this._animatedValueY > onTapCardDeadZone
+      x < -onTapCardDeadZone ||
+      x > onTapCardDeadZone ||
+      y < -onTapCardDeadZone ||
+      y > onTapCardDeadZone
     ) {
-      this.setState({
-        slideGesture: true
-      })
+      this.setState({ slideGesture: true })
     }
-
-    return Animated.event([null, this.createAnimatedEvent()], { useNativeDriver: false })(
-      event,
-      gestureState
-    )
   }
 
-  onPanResponderGrant = (event, gestureState) => {
-    this.props.dragStart && this.props.dragStart()
-    if (!this.state.panResponderLocked) {
-      this.state.pan.setOffset({
-        x: 0,
-        y: 0
-      })
+  onGestureEnd = (dx, dy, velocityX, velocityY) => {
+    this.props.dragEnd && this.props.dragEnd()
+
+    if (this.state.panResponderLocked) {
+      this.state.pan.setValue({ x: 0, y: 0 })
+      this.state.pan.setOffset({ x: 0, y: 0 })
+      return
     }
 
-    this.state.pan.setValue({
-      x: 0,
-      y: 0
+    const { horizontalThreshold, verticalThreshold } = this.props
+    const x = this.props.horizontalSwipe ? dx : 0
+    const y = this.props.verticalSwipe ? dy : 0
+
+    const animatedValueX = Math.abs(x)
+    const animatedValueY = Math.abs(y)
+
+    const isSwiping =
+      animatedValueX > horizontalThreshold || animatedValueY > verticalThreshold
+
+    if (isSwiping && this.validPanResponderRelease()) {
+      const onSwipeDirectionCallback = this.getOnSwipeDirectionCallback(x, y)
+      this.swipeCard(onSwipeDirectionCallback)
+    } else {
+      this.resetTopCard()
+    }
+
+    if (!this.state.slideGesture) {
+      this.props.onTapCard(this.state.firstCardIndex)
+    }
+
+    this.setState({
+      labelType: LABEL_TYPES.NONE,
+      slideGesture: false
     })
+  }
+
+  onDimensionsChange = () => {
+    this.forceUpdate()
   }
 
   validPanResponderRelease = () => {
@@ -252,50 +262,6 @@ class Swiper extends Component {
       (isSwipingTop && !disableTopSwipe) ||
       (isSwipingBottom && !disableBottomSwipe)
     )
-  }
-
-  onPanResponderRelease = (e, gestureState) => {
-    this.props.dragEnd && this.props.dragEnd()
-    if (this.state.panResponderLocked) {
-      this.state.pan.setValue({
-        x: 0,
-        y: 0
-      })
-      this.state.pan.setOffset({
-        x: 0,
-        y: 0
-      })
-
-      return
-    }
-
-    const { horizontalThreshold, verticalThreshold } = this.props
-
-    const animatedValueX = Math.abs(this._animatedValueX)
-    const animatedValueY = Math.abs(this._animatedValueY)
-
-    const isSwiping =
-      animatedValueX > horizontalThreshold || animatedValueY > verticalThreshold
-
-    if (isSwiping && this.validPanResponderRelease()) {
-      const onSwipeDirectionCallback = this.getOnSwipeDirectionCallback(
-        this._animatedValueX,
-        this._animatedValueY
-      )
-
-      this.swipeCard(onSwipeDirectionCallback)
-    } else {
-      this.resetTopCard()
-    }
-
-    if (!this.state.slideGesture) {
-      this.props.onTapCard(this.state.firstCardIndex)
-    }
-
-    this.setState({
-      labelType: LABEL_TYPES.NONE,
-      slideGesture: false
-    })
   }
 
   getOnSwipeDirectionCallback = (animatedValueX, animatedValueY) => {
@@ -723,9 +689,9 @@ class Swiper extends Component {
     })
 
   render = () => {
-    const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID, blockParentGestures } = this.props
+    const { pointerEvents, backgroundColor, marginTop, marginBottom, containerStyle, swipeBackCard, testID } = this.props
 
-    const content = (
+    return (
       <View
         pointerEvents={pointerEvents}
         testID={testID}
@@ -744,17 +710,6 @@ class Swiper extends Component {
         {this.renderStack()}
       </View>
     )
-
-    // Wrap with GestureDetector to block parent gestures (like modal dismiss)
-    if (blockParentGestures && this._blockingGesture) {
-      return (
-        <GestureDetector gesture={this._blockingGesture}>
-          {content}
-        </GestureDetector>
-      )
-    }
-
-    return content
   }
 
   renderChildren = () => {
@@ -791,16 +746,28 @@ class Swiper extends Component {
     const stackCard = this.props.renderCard(cards[index], index)
     const swipableCardStyle = this.calculateSwipableCardStyle()
     const renderOverlayLabel = this.renderOverlayLabel()
-    renderedCards.push(
-      <Animated.View
-        key={key}
-        style={firstCard ? swipableCardStyle : stackCardZoomStyle}
-        {...this._panResponder.panHandlers}
-      >
-        {firstCard ? renderOverlayLabel : null}
-        {stackCard}
-      </Animated.View>
-    )
+
+    // First card (top of stack) gets gesture handling
+    if (firstCard) {
+      renderedCards.push(
+        <GestureDetector key={key} gesture={this._panGesture}>
+          <Animated.View style={swipableCardStyle}>
+            {renderOverlayLabel}
+            {stackCard}
+          </Animated.View>
+        </GestureDetector>
+      )
+    } else {
+      // Other cards in the stack don't need gesture handling
+      renderedCards.push(
+        <Animated.View
+          key={key}
+          style={stackCardZoomStyle}
+        >
+          {stackCard}
+        </Animated.View>
+      )
+    }
   }
 
   renderStack = () => {
@@ -960,10 +927,7 @@ Swiper.propTypes = {
   verticalSwipe: PropTypes.bool,
   verticalThreshold: PropTypes.number,
   zoomAnimationDuration: PropTypes.number,
-  zoomFriction: PropTypes.number,
-  // Gesture blocking props
-  blockParentGestures: PropTypes.bool,
-  simultaneousHandlerRefs: PropTypes.array
+  zoomFriction: PropTypes.number
 }
 
 Swiper.defaultProps = {
@@ -1057,10 +1021,7 @@ Swiper.defaultProps = {
   verticalSwipe: true,
   verticalThreshold: height / 5,
   zoomAnimationDuration: 100,
-  zoomFriction: 7,
-  // Block parent gestures (like modal swipe-to-dismiss) by default
-  blockParentGestures: true,
-  simultaneousHandlerRefs: []
+  zoomFriction: 7
 }
 
 export default Swiper
