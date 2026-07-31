@@ -1,6 +1,6 @@
 import isEqual from 'lodash/isEqual'
 import PropTypes from 'prop-types'
-import React, { Component } from 'react'
+import { Component } from 'react'
 import { Animated, Dimensions, InteractionManager, StyleSheet, Text, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 
@@ -387,7 +387,7 @@ class Swiper extends Component {
     if (
       redirectBottomToHorizontal &&
       y > 0 &&
-      (Math.abs(x) >= bottomSwipeHorizontalThreshold || y >= verticalThreshold)
+      (Math.abs(x) >= bottomSwipeHorizontalThreshold) || (y >= verticalThreshold && Math.abs(x) >= 2)
     ) {
       return x <= 0 ? 'left' : 'right'
     }
@@ -1256,7 +1256,7 @@ Swiper.defaultProps = {
   topCardResetAnimationFriction: 7,
   topCardResetAnimationTension: 40,
   verticalSwipe: true,
-  verticalThreshold: height / 5,
+  verticalThreshold: width / 4,
   zoomAnimationDuration: 100,
   zoomFriction: 7
 }
