@@ -377,17 +377,21 @@ class Swiper extends Component {
     if (x >= horizontalThreshold) return 'right'
     // Upward past the vertical threshold.
     if (y <= -verticalThreshold) return 'top'
-    // Downward has no dedicated action: fold it into left/right by a SMALLER
-    // horizontal lean (down-left => left) so there is no bottom dead zone.
-    // Tunable via bottomSwipeHorizontalThreshold; gated on redirectBottomToHorizontal.
+    // Downward has no dedicated action: fold it into left/right (never snap
+    // back to "nothing"). It commits when EITHER:
+    //  (a) there's a slight horizontal lean (|x| past bottomSwipeHorizontalThreshold)
+    //      — commits early, so a light down-left/right registers with no dead zone; or
+    //  (b) the drag has gone down past the vertical threshold — commits regardless
+    //      of lean, even straight down.
+    // Side is the sign of x, defaulting to LEFT at exactly 0.
     if (
       redirectBottomToHorizontal &&
       y > 0 &&
-      Math.abs(x) >= bottomSwipeHorizontalThreshold
+      (Math.abs(x) >= bottomSwipeHorizontalThreshold || y >= verticalThreshold)
     ) {
-      return x < 0 ? 'left' : 'right'
+      return x <= 0 ? 'left' : 'right'
     }
-    // Straight down past the vertical threshold (no lean, or redirect disabled).
+    // Straight down past the vertical threshold with redirect disabled — bottom.
     if (y >= verticalThreshold) return 'bottom'
     return null
   }
