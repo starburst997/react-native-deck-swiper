@@ -59,6 +59,7 @@ class Swiper extends Component {
     this._mounted = true
     this._animatedValueX = 0
     this._animatedValueY = 0
+    this._lastEmittedDirection = null
 
     // Regular z-index values for each slot - NOT Animated.Value since z-index shouldn't interpolate
     this._slotZIndexes = Array.from({ length: props.stackSize }, (_, i) =>
@@ -181,6 +182,15 @@ class Swiper extends Component {
 
     this.props.onSwiping(x, y)
 
+    // Emit the resolved commit-direction so a consumer can mirror it (e.g. a
+    // grade-button hover) using the exact logic release will commit with — only
+    // when it changes, to avoid spamming setState on every move frame.
+    const resolvedDirection = this.getResolvedSwipeDirection(x, y)
+    if (resolvedDirection !== this._lastEmittedDirection) {
+      this._lastEmittedDirection = resolvedDirection
+      this.props.onSwipeDirection(resolvedDirection)
+    }
+
     let { overlayOpacityHorizontalThreshold, overlayOpacityVerticalThreshold } = this.props
     if (!overlayOpacityHorizontalThreshold) {
       overlayOpacityHorizontalThreshold = this.props.horizontalThreshold
@@ -231,47 +241,33 @@ class Swiper extends Component {
       return
     }
 
-    const { horizontalThreshold, verticalThreshold } = this.props
     const x = this.props.horizontalSwipe ? dx : 0
     const y = this.props.verticalSwipe ? dy : 0
 
-    // No "swipe down" gesture exists: when redirectBottomToHorizontal is on, a
-    // downward drag (y > 0) has no bottom action and instead commits left/right
-    // by the sign of its horizontal lean — a slight down-left goes Left, a
-    // slight down-right goes Right — removing the bottom deadzone that would
-    // otherwise snap these back. Up-swipes (y < 0) are untouched, and a strong
-    // horizontal drag (|x| past the threshold) still resolves via the normal
-    // priority below, so this only rescues the down-dominant, slight-lean case.
-    if (
-      this.props.redirectBottomToHorizontal &&
-      y > verticalThreshold &&
-      Math.abs(x) > 0 &&
-      Math.abs(x) <= horizontalThreshold
-    ) {
-      const toLeft = x < 0
-      const disabled = toLeft
-        ? this.props.disableLeftSwipe
-        : this.props.disableRightSwipe
-      if (!disabled) {
-        this.swipeCard(
-          toLeft ? this.props.onSwipedLeft : this.props.onSwipedRight,
-          toLeft ? -horizontalThreshold : horizontalThreshold,
-          0
-        )
-        this.setState({ labelType: LABEL_TYPES.NONE, slideGesture: false })
-        return
-      }
+    // Commit direction comes from the SAME resolver that drives the live
+    // onSwipeDirection intent during the drag, so what lit up is exactly what
+    // commits — no separate threshold logic that can disagree.
+    const direction = this.getResolvedSwipeDirection(x, y)
+    const disabledByDirection = {
+      left: this.props.disableLeftSwipe,
+      right: this.props.disableRightSwipe,
+      top: this.props.disableTopSwipe,
+      bottom: this.props.disableBottomSwipe
+    }
+    const callbackByDirection = {
+      left: this.props.onSwipedLeft,
+      right: this.props.onSwipedRight,
+      top: this.props.onSwipedTop,
+      bottom: this.props.onSwipedBottom
     }
 
-    const animatedValueX = Math.abs(x)
-    const animatedValueY = Math.abs(y)
-
-    const isSwiping =
-      animatedValueX > horizontalThreshold || animatedValueY > verticalThreshold
-
-    if (isSwiping && this.validPanResponderRelease()) {
-      const onSwipeDirectionCallback = this.getOnSwipeDirectionCallback(x, y)
-      this.swipeCard(onSwipeDirectionCallback)
+    if (direction && !disabledByDirection[direction]) {
+      // Throw along the ACTUAL release position + momentum — swipeCard's default
+      // x/y are the live _animatedValueX/Y, so the card keeps flying the exact
+      // way it was flicked (the original buttery feel). Never pass synthetic
+      // threshold coordinates here: that straightens the arc to y=0 and cans the
+      // throw to a fixed distance, which is what wrecked the feel.
+      this.swipeCard(callbackByDirection[direction])
     } else {
       this.resetTopCard()
     }
@@ -284,6 +280,10 @@ class Swiper extends Component {
       labelType: LABEL_TYPES.NONE,
       slideGesture: false
     })
+
+    // Intent is over — tell consumers to clear their hover.
+    this._lastEmittedDirection = null
+    this.props.onSwipeDirection(null)
   }
 
   onDimensionsChange = () => {
@@ -359,6 +359,37 @@ class Swiper extends Component {
       (isSwipingTop && this.props.goBackToPreviousCardOnSwipeTop) ||
       (isSwipingBottom && this.props.goBackToPreviousCardOnSwipeBottom)
     )
+  }
+
+  // Single source of truth for BOTH the live intent (onSwipeDirection, emitted
+  // during the drag) and the direction committed on release, so the hover a
+  // consumer paints and the graded outcome can never disagree. Returns
+  // 'left' | 'right' | 'top' | 'bottom' | null.
+  getResolvedSwipeDirection = (x, y) => {
+    const {
+      horizontalThreshold,
+      verticalThreshold,
+      redirectBottomToHorizontal,
+      bottomSwipeHorizontalThreshold
+    } = this.props
+    // Horizontal wins the moment it passes its threshold, whatever the vertical.
+    if (x <= -horizontalThreshold) return 'left'
+    if (x >= horizontalThreshold) return 'right'
+    // Upward past the vertical threshold.
+    if (y <= -verticalThreshold) return 'top'
+    // Downward has no dedicated action: fold it into left/right by a SMALLER
+    // horizontal lean (down-left => left) so there is no bottom dead zone.
+    // Tunable via bottomSwipeHorizontalThreshold; gated on redirectBottomToHorizontal.
+    if (
+      redirectBottomToHorizontal &&
+      y > 0 &&
+      Math.abs(x) >= bottomSwipeHorizontalThreshold
+    ) {
+      return x < 0 ? 'left' : 'right'
+    }
+    // Straight down past the vertical threshold (no lean, or redirect disabled).
+    if (y >= verticalThreshold) return 'bottom'
+    return null
   }
 
   getSwipeDirection = (animatedValueX, animatedValueY) => {
@@ -1090,6 +1121,7 @@ Swiper.propTypes = {
   onSwipedLeft: PropTypes.func,
   onSwipedRight: PropTypes.func,
   onSwipedTop: PropTypes.func,
+  onSwipeDirection: PropTypes.func,
   onSwiping: PropTypes.func,
   onTapCard: PropTypes.func,
   onTapCardDeadZone: PropTypes.number,
@@ -1108,6 +1140,7 @@ Swiper.propTypes = {
   previousCardDefaultPositionX: PropTypes.number,
   previousCardDefaultPositionY: PropTypes.number,
   redirectBottomToHorizontal: PropTypes.bool,
+  bottomSwipeHorizontalThreshold: PropTypes.number,
   renderCard: PropTypes.func.isRequired,
   secondCardZoom: PropTypes.number,
   showSecondCard: PropTypes.bool,
@@ -1175,6 +1208,7 @@ Swiper.defaultProps = {
   onSwipedLeft: cardIndex => { },
   onSwipedRight: cardIndex => { },
   onSwipedTop: cardIndex => { },
+  onSwipeDirection: () => { },
   onSwiping: () => { },
   onTapCard: (cardIndex) => { },
   onTapCardDeadZone: 5,
@@ -1205,6 +1239,7 @@ Swiper.defaultProps = {
   previousCardDefaultPositionX: -width,
   previousCardDefaultPositionY: -height,
   redirectBottomToHorizontal: false,
+  bottomSwipeHorizontalThreshold: 20,
   secondCardZoom: 0.97,
   showSecondCard: true,
   stackAnimationFriction: 7,
