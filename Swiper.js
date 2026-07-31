@@ -235,6 +235,34 @@ class Swiper extends Component {
     const x = this.props.horizontalSwipe ? dx : 0
     const y = this.props.verticalSwipe ? dy : 0
 
+    // No "swipe down" gesture exists: when redirectBottomToHorizontal is on, a
+    // downward drag (y > 0) has no bottom action and instead commits left/right
+    // by the sign of its horizontal lean — a slight down-left goes Left, a
+    // slight down-right goes Right — removing the bottom deadzone that would
+    // otherwise snap these back. Up-swipes (y < 0) are untouched, and a strong
+    // horizontal drag (|x| past the threshold) still resolves via the normal
+    // priority below, so this only rescues the down-dominant, slight-lean case.
+    if (
+      this.props.redirectBottomToHorizontal &&
+      y > verticalThreshold &&
+      Math.abs(x) > 0 &&
+      Math.abs(x) <= horizontalThreshold
+    ) {
+      const toLeft = x < 0
+      const disabled = toLeft
+        ? this.props.disableLeftSwipe
+        : this.props.disableRightSwipe
+      if (!disabled) {
+        this.swipeCard(
+          toLeft ? this.props.onSwipedLeft : this.props.onSwipedRight,
+          toLeft ? -horizontalThreshold : horizontalThreshold,
+          0
+        )
+        this.setState({ labelType: LABEL_TYPES.NONE, slideGesture: false })
+        return
+      }
+    }
+
     const animatedValueX = Math.abs(x)
     const animatedValueY = Math.abs(y)
 
@@ -412,6 +440,13 @@ class Swiper extends Component {
     y = this._animatedValueY,
     mustDecrementCardIndex = false
   ) => {
+    // Ignore any swipe fired while one is already animating. The drag path
+    // guards on this lock (see onGestureEnd), but the public swipeLeft/Right/
+    // Top/Bottom methods used by tap-to-grade buttons did not — so rapid taps
+    // stacked overlapping animations, each calling incrementCardIndex, and
+    // over-advanced the index straight into onSwipedAll, ending the session
+    // unexpectedly. A single swipe must fully complete before the next starts.
+    if (this.state.panResponderLocked) return
     this.setState({ panResponderLocked: true })
     this.animateStack()
     Animated.timing(this.state.pan, {
@@ -1072,6 +1107,7 @@ Swiper.propTypes = {
   pointerEvents: PropTypes.oneOf(['box-none', 'none', 'box-only', 'auto']),
   previousCardDefaultPositionX: PropTypes.number,
   previousCardDefaultPositionY: PropTypes.number,
+  redirectBottomToHorizontal: PropTypes.bool,
   renderCard: PropTypes.func.isRequired,
   secondCardZoom: PropTypes.number,
   showSecondCard: PropTypes.bool,
@@ -1168,6 +1204,7 @@ Swiper.defaultProps = {
   pointerEvents: 'auto',
   previousCardDefaultPositionX: -width,
   previousCardDefaultPositionY: -height,
+  redirectBottomToHorizontal: false,
   secondCardZoom: 0.97,
   showSecondCard: true,
   stackAnimationFriction: 7,

@@ -54,6 +54,7 @@ declare module 'react-native-deck-swiper' {
     pointerEvents?: string;
     previousCardDefaultPositionX?: number;
     previousCardDefaultPositionY?: number;
+    redirectBottomToHorizontal?: boolean;
     renderCard: (cardData: T, cardIndex: number) => JSX.Element | null;
     secondCardZoom?: number;
     showSecondCard?: boolean;
