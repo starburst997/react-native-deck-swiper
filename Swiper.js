@@ -1,7 +1,7 @@
 import isEqual from 'lodash/isEqual'
 import PropTypes from 'prop-types'
 import { Component } from 'react'
-import { Animated, Dimensions, InteractionManager, StyleSheet, Text, View } from 'react-native'
+import { Animated, Dimensions, Easing, InteractionManager, StyleSheet, Text, View } from 'react-native'
 import { Gesture, GestureDetector } from 'react-native-gesture-handler'
 
 import styles from './styles'
@@ -60,6 +60,14 @@ class Swiper extends Component {
     this._animatedValueX = 0
     this._animatedValueY = 0
     this._lastEmittedDirection = null
+    // True for the whole lifetime of a gesture that began while a card was
+    // still flying out. Such a gesture must never touch `pan` (see
+    // onGestureStart) — not on start, not on move, not on release.
+    this._gestureIgnored = false
+    // Synchronous mirror of state.panResponderLocked. setState only lands on
+    // the next render, so a second swipe (or a gesture) firing in the same tick
+    // would still read the lock as open and hijack the flight mid-air.
+    this._swipeInFlight = false
 
     // Regular z-index values for each slot - NOT Animated.Value since z-index shouldn't interpolate
     this._slotZIndexes = Array.from({ length: props.stackSize }, (_, i) =>
@@ -161,14 +169,27 @@ class Swiper extends Component {
   }
 
   onGestureStart = () => {
-    this.props.dragStart && this.props.dragStart()
-    if (!this.state.panResponderLocked) {
-      this.state.pan.setOffset({ x: 0, y: 0 })
+    // A card is still flying out: `pan` is owned by that animation, and
+    // Animated.Value.setValue() STOPS whatever animation is running on it. The
+    // old code called setValue here unconditionally, so touching the deck
+    // mid-flight killed the fly-out in place — the card froze half-faded and
+    // then vanished when the (now instantly-finished) animation recycled it.
+    // That was the "hiccup": the transition visibly never reached its end.
+    // Mark the whole gesture inert instead, so its later move/release frames
+    // can't hijack `pan` either once the lock releases mid-gesture.
+    if (this._swipeInFlight || this.state.panResponderLocked) {
+      this._gestureIgnored = true
+      return
     }
+    this._gestureIgnored = false
+    this.props.dragStart && this.props.dragStart()
+    this.state.pan.setOffset({ x: 0, y: 0 })
     this.state.pan.setValue({ x: 0, y: 0 })
   }
 
   onGestureMove = (dx, dy) => {
+    if (this._gestureIgnored || this._swipeInFlight || this.state.panResponderLocked) return
+
     const { horizontalSwipe, verticalSwipe } = this.props
 
     // Update the animated values
@@ -209,37 +230,45 @@ class Swiper extends Component {
       else isSwipingTop = true
     }
 
-    if (isSwipingRight) {
-      this.setState({ labelType: LABEL_TYPES.RIGHT })
-    } else if (isSwipingLeft) {
-      this.setState({ labelType: LABEL_TYPES.LEFT })
-    } else if (isSwipingTop) {
-      this.setState({ labelType: LABEL_TYPES.TOP })
-    } else if (isSwipingBottom) {
-      this.setState({ labelType: LABEL_TYPES.BOTTOM })
-    } else {
-      this.setState({ labelType: LABEL_TYPES.NONE })
+    // Only write state that actually changed: this runs on EVERY move frame,
+    // and a same-value setState still costs a full React update pass (plus a
+    // shouldComponentUpdate over the whole card array) for no rendered change.
+    const labelType = isSwipingRight
+      ? LABEL_TYPES.RIGHT
+      : isSwipingLeft
+        ? LABEL_TYPES.LEFT
+        : isSwipingTop
+          ? LABEL_TYPES.TOP
+          : isSwipingBottom
+            ? LABEL_TYPES.BOTTOM
+            : LABEL_TYPES.NONE
+
+    if (labelType !== this.state.labelType) {
+      this.setState({ labelType })
     }
 
     const { onTapCardDeadZone } = this.props
     if (
-      x < -onTapCardDeadZone ||
-      x > onTapCardDeadZone ||
-      y < -onTapCardDeadZone ||
-      y > onTapCardDeadZone
+      !this.state.slideGesture &&
+      (x < -onTapCardDeadZone ||
+        x > onTapCardDeadZone ||
+        y < -onTapCardDeadZone ||
+        y > onTapCardDeadZone)
     ) {
       this.setState({ slideGesture: true })
     }
   }
 
   onGestureEnd = (dx, dy, velocityX, velocityY) => {
-    this.props.dragEnd && this.props.dragEnd()
-
-    if (this.state.panResponderLocked) {
-      this.state.pan.setValue({ x: 0, y: 0 })
-      this.state.pan.setOffset({ x: 0, y: 0 })
+    // Inert gesture — it either began during a fly-out or one started under it.
+    // Never reset `pan` here: it belongs to the in-flight animation and
+    // setValue would cut it short. Also never grade or tap-flip from it.
+    if (this._gestureIgnored || this._swipeInFlight || this.state.panResponderLocked) {
+      this._gestureIgnored = false
       return
     }
+
+    this.props.dragEnd && this.props.dragEnd()
 
     const x = this.props.horizontalSwipe ? dx : 0
     const y = this.props.verticalSwipe ? dy : 0
@@ -469,6 +498,39 @@ class Swiper extends Component {
     )
   }
 
+  // How far a released card is thrown. The release vector sets the DIRECTION
+  // (and the arc — never straighten it); a uniform scale sets the DISTANCE, so
+  // the card always carries fully past the screen edge instead of stopping
+  // wherever `release * 4` happened to land. Short commits — a light flick, or
+  // a tap-to-grade, which starts at exactly the threshold — used to end their
+  // flight still half on screen and clearly visible, and the card then blinked
+  // out on the spot. Hard flicks keep the original factor as a floor, so their
+  // (already off-screen) throw is untouched.
+  calculateThrowTarget = (x, y) => {
+    const { height: windowHeight, width: windowWidth } = Dimensions.get('window')
+    const defaultCardStyle = this.getCardStyle()
+    const cardStyle = this.props.cardStyle || {}
+    const cardWidth = typeof cardStyle.width === 'number' ? cardStyle.width : defaultCardStyle.width
+    const cardHeight = typeof cardStyle.height === 'number' ? cardStyle.height : defaultCardStyle.height
+
+    // Travel that takes a (roughly centered) card fully past the edge, plus a
+    // margin for the rotation it picks up on the way out.
+    const escapeX = (windowWidth + cardWidth) / 2 + 40
+    const escapeY = (windowHeight + cardHeight) / 2 + 40
+
+    // Smallest uniform scale that clears whichever edge the card is heading
+    // for. Uniform = the arc stays exactly as it was flicked.
+    const scale = Math.min(
+      Math.abs(x) > 0 ? escapeX / Math.abs(x) : Infinity,
+      Math.abs(y) > 0 ? escapeY / Math.abs(y) : Infinity
+    )
+    const factor = Number.isFinite(scale)
+      ? Math.max(SWIPE_MULTIPLY_FACTOR, scale)
+      : SWIPE_MULTIPLY_FACTOR
+
+    return { x: x * factor, y: y * factor }
+  }
+
   swipeCard = (
     onSwiped,
     x = this._animatedValueX,
@@ -481,51 +543,69 @@ class Swiper extends Component {
     // stacked overlapping animations, each calling incrementCardIndex, and
     // over-advanced the index straight into onSwipedAll, ending the session
     // unexpectedly. A single swipe must fully complete before the next starts.
-    if (this.state.panResponderLocked) return
+    if (this._swipeInFlight || this.state.panResponderLocked) return
+    this._swipeInFlight = true
     this.setState({ panResponderLocked: true })
     this.animateStack()
-    Animated.timing(this.state.pan, {
-      toValue: {
-        x: x * SWIPE_MULTIPLY_FACTOR,
-        y: y * SWIPE_MULTIPLY_FACTOR
-      },
-      duration: this.props.swipeAnimationDuration,
-      useNativeDriver: true
-    }).start(() => {
-      // Animation completed - card is off-screen and invisible
-      // Update z-indexes immediately
-      const { swipedCount } = this.state
-      const { stackSize } = this.props
-      const swipedSlot = swipedCount % stackSize
-      const newTopSlot = (swipedCount + 1) % stackSize
+
+    const { stackSize } = this.props
+    // The slot that is flying out. Safe to resolve up-front: swipedCount only
+    // moves in setCardIndex, which can't run until this flight completes.
+    const swipedSlot = this.state.swipedCount % stackSize
+
+    // Flight and fade are ONE animation over ONE window: the card keeps moving
+    // past the screen edge and lands on opacity 0 at the exact frame the
+    // movement stops — no dead pause, no visible card snapped out of existence
+    // mid-fade. The slot is only put back under the pile from the completion
+    // callback, so a card can never be recycled while its animation is running.
+    Animated.parallel([
+      Animated.timing(this.state.pan, {
+        toValue: this.calculateThrowTarget(x, y),
+        duration: this.props.swipeAnimationDuration,
+        useNativeDriver: true
+      }),
+      Animated.timing(this._slotOpacities[swipedSlot], {
+        toValue: 0,
+        duration: this.props.swipeAnimationDuration,
+        // Linear against the eased flight reads as a steady fade while the
+        // card flies away; an eased fade instead lingers just above 0.
+        easing: Easing.linear,
+        useNativeDriver: true
+      })
+    ]).start(({ finished }) => {
+      // Card is off-screen at opacity 0 — safe to put the slot back under the
+      // pile. Re-assign z-indexes so the swiped slot becomes the bottom one.
+      const newTopSlot = (this.state.swipedCount + 1) % stackSize
       for (let i = 0; i < stackSize; i++) {
         const distanceFromTop = (i - newTopSlot + stackSize) % stackSize
         this._slotZIndexes[i] = stackSize - distanceFromTop
       }
 
-      // Set swiped slot opacity to 0 (it will fade in after pan reset)
-      this._slotOpacities[swipedSlot].setValue(0)
+      // Interrupted flight (unmount, or a competing animation on pan): pin the
+      // slot invisible anyway, so it can't reappear where it was dropped.
+      if (!finished) {
+        this._slotOpacities[swipedSlot].setValue(0)
+      }
 
-      // Force re-render to apply z-index and opacity=0
+      // Apply the new z-indexes. The slot stays at opacity 0 until its content
+      // has been swapped for the next card and it has faded back in at the
+      // bottom (setCardIndex), so no frame in between can show a stale card.
       this.forceUpdate()
 
-      // Small delay to ensure z-index and opacity are visually applied before pan reset
-      setTimeout(() => {
-        this.setSwipeBackCardXY(x, y, () => {
-          mustDecrementCardIndex = mustDecrementCardIndex
-            ? true
-            : this.mustDecrementCardIndex(
-                this._animatedValueX,
-                this._animatedValueY
-              )
+      this.setSwipeBackCardXY(x, y, () => {
+        mustDecrementCardIndex = mustDecrementCardIndex
+          ? true
+          : this.mustDecrementCardIndex(
+              this._animatedValueX,
+              this._animatedValueY
+            )
 
-          if (mustDecrementCardIndex) {
-            this.decrementCardIndex(onSwiped)
-          } else {
-            this.incrementCardIndex(onSwiped)
-          }
-        })
-      }, 20)
+        if (mustDecrementCardIndex) {
+          this.decrementCardIndex(onSwiped)
+        } else {
+          this.incrementCardIndex(onSwiped)
+        }
+      })
     })
   }
 
@@ -686,12 +766,16 @@ class Swiper extends Component {
         () => {
           this.resetPanAndScale()
 
-          // Fade in the swiped slot (now at bottom of stack)
+          // Fade in the swiped slot (now at bottom of stack). Only now — the
+          // slot holds the NEXT card and sits under the whole pile — is the
+          // recycle actually complete, so this is where the lock opens.
           Animated.timing(this._slotOpacities[swipedSlot], {
             toValue: 1,
             duration: 250,
             useNativeDriver: true
           }).start()
+
+          this._swipeInFlight = false
         }
       )
     }
@@ -705,8 +789,11 @@ class Swiper extends Component {
     this._animatedValueY = 0
     this.state.previousCardX.setValue(previousCardDefaultPositionX)
     this.state.previousCardY.setValue(previousCardDefaultPositionY)
-    this.state.pan.x.addListener(value => this._animatedValueX = value.value)
-    this.state.pan.y.addListener(value => this._animatedValueY = value.value)
+    // NOTE: pan listeners are attached ONCE in the constructor and live until
+    // unmount. The original library re-added them here, i.e. on every swipe —
+    // so after N cards, N+1 listeners fired per animation frame (each one a
+    // native → JS hop, since pan is native-driven). That is why a session got
+    // progressively less smooth the longer you studied.
   }
 
   calculateNextPreviousCardPosition = () => {
